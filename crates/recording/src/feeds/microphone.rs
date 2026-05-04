@@ -412,19 +412,29 @@ fn select_preferred_config(
     settings: &MicrophoneDeviceSettings,
 ) -> Option<SupportedStreamConfig> {
     let rate = settings.sample_rate.map(cpal::SampleRate);
-
-    configs
+    let compatible_configs = configs
         .iter()
-        .find(|config| {
-            ffmpeg_sample_format_for(config.sample_format()).is_some()
-                && settings
-                    .channels
-                    .is_none_or(|channels| config.channels() == channels)
+        .filter(|config| ffmpeg_sample_format_for(config.sample_format()).is_some())
+        .collect::<Vec<_>>();
+
+    let find_config = |channels: Option<u16>, rate: Option<cpal::SampleRate>| {
+        compatible_configs.iter().find(|config| {
+            channels.is_none_or(|channels| config.channels() == channels)
                 && rate.is_none_or(|rate| {
                     config.min_sample_rate().0 <= rate.0 && config.max_sample_rate().0 >= rate.0
                 })
         })
-        .map(|config| config.with_sample_rate(rate.unwrap_or_else(|| select_sample_rate(config))))
+    };
+
+    let config = find_config(settings.channels, rate)
+        .or_else(|| rate.and_then(|rate| find_config(None, Some(rate))))
+        .or_else(|| {
+            settings
+                .channels
+                .and_then(|channels| find_config(Some(channels), None))
+        })?;
+
+    Some(config.with_sample_rate(rate.unwrap_or_else(|| select_sample_rate(config))))
 }
 
 fn select_sample_rate(config: &SupportedStreamConfigRange) -> cpal::SampleRate {

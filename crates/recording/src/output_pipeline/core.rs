@@ -1716,7 +1716,7 @@ fn resolve_pipeline_completion(
 ) -> anyhow::Result<()> {
     match (task_result, muxer_result) {
         (Err(error), _) | (_, Err(error)) => Err(error),
-        (_, Ok(Ok(()))) if stop_signal.user_stopped() => Err(anyhow!(PipelineStoppedByUser)),
+        (_, Ok(Ok(()))) if stop_signal.user_stopped() => Ok(()),
         (_, Ok(Ok(()))) => Ok(()),
         (_, Ok(Err(error))) => Err(anyhow!("Muxer finish failed: {error:#}")),
     }
@@ -3365,14 +3365,12 @@ mod tests {
         }
 
         #[test]
-        fn surfaces_user_stop_after_clean_finish() {
+        fn treats_user_stop_after_clean_finish_as_success() {
             let signal = PipelineStopSignal::default();
             signal.mark_user_stopped();
 
-            let error = resolve_pipeline_completion(Ok(()), Ok(Ok(())), &signal)
-                .expect_err("user stop should surface as a typed pipeline completion");
-
-            assert!(error.is::<PipelineStoppedByUser>());
+            resolve_pipeline_completion(Ok(()), Ok(Ok(())), &signal)
+                .expect("user stop should complete cleanly after successful finish");
         }
     }
 

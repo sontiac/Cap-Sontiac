@@ -191,13 +191,10 @@ export function createStableDevicesQuery(
 				commands.getMicrophoneInfo(name).then((info) => {
 					pendingMicFetches.delete(name);
 					if (info) {
-						const extendedInfo = info as typeof info & {
-							formats?: MicrophoneFormatInfo[];
-						};
 						const details = {
 							sampleRate: info.sampleRate,
 							channels: info.channels,
-							formats: extendedInfo.formats,
+							formats: info.formats,
 						};
 						micDetailsCache[name] = details;
 						setMicrophones(
