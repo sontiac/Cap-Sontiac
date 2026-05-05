@@ -18,6 +18,7 @@ import {
 	createSignal,
 	ErrorBoundary,
 	For,
+	on,
 	onCleanup,
 	onMount,
 	Show,
@@ -826,6 +827,16 @@ function DeviceListPanel(props: DeviceListPanelProps) {
 		setTimeout(() => containerRef?.focus(), 50);
 	});
 
+	createEffect(
+		on(
+			() => props.initialSettingsTarget,
+			(initialTarget) => {
+				if (initialTarget) setSettingsTarget(initialTarget);
+			},
+			{ defer: true },
+		),
+	);
+
 	createEffect(() => {
 		const idx = focusedIndex();
 		if (idx >= 0 && itemRefs[idx]) {
@@ -1579,6 +1590,10 @@ function Page() {
 		createSignal<CameraWithDetails | null>(null);
 	const [microphoneInitialSettings, setMicrophoneInitialSettings] =
 		createSignal<MicrophoneWithDetails | null>(null);
+	const [openCameraSettingsWhenReady, setOpenCameraSettingsWhenReady] =
+		createSignal(false);
+	const [openMicrophoneSettingsWhenReady, setOpenMicrophoneSettingsWhenReady] =
+		createSignal(false);
 	const activeMenu = createMemo<
 		| "display"
 		| "window"
@@ -1834,6 +1849,8 @@ function Page() {
 		setMicrophoneMenuOpen(false);
 		setCameraInitialSettings(null);
 		setMicrophoneInitialSettings(null);
+		setOpenCameraSettingsWhenReady(false);
+		setOpenMicrophoneSettingsWhenReady(false);
 	});
 
 	const setMicInput = createMutation(() => ({
@@ -1994,6 +2011,26 @@ function Page() {
 	});
 
 	createEffect(() => {
+		if (!cameraMenuOpen() || !openCameraSettingsWhenReady()) return;
+		const camera = rawOptions.cameraID
+			? findCamera(devices.cameras, rawOptions.cameraID)
+			: undefined;
+		if (!camera) return;
+		setCameraInitialSettings(camera);
+		setOpenCameraSettingsWhenReady(false);
+	});
+
+	createEffect(() => {
+		if (!microphoneMenuOpen() || !openMicrophoneSettingsWhenReady()) return;
+		const mic = rawOptions.micName
+			? devices.microphones.find((m) => m.name === rawOptions.micName)
+			: undefined;
+		if (!mic) return;
+		setMicrophoneInitialSettings(mic);
+		setOpenMicrophoneSettingsWhenReady(false);
+	});
+
+	createEffect(() => {
 		if (!enableDeviceQueries() || devices.isPending || devices.isLoading)
 			return;
 		const permissions = currentPermissions();
@@ -2128,9 +2165,15 @@ function Page() {
 		},
 	}));
 
-	const openCameraMenu = (initialSettings: CameraWithDetails | null) => {
+	const openCameraMenu = (
+		initialSettings: CameraWithDetails | null,
+		openSettingsWhenReady = false,
+	) => {
 		setEnableDeviceQueries(true);
 		setCameraInitialSettings(initialSettings);
+		setOpenCameraSettingsWhenReady(
+			openSettingsWhenReady && initialSettings === null,
+		);
 		setCameraMenuOpen(true);
 		setDisplayMenuOpen(false);
 		setWindowMenuOpen(false);
@@ -2142,9 +2185,13 @@ function Page() {
 
 	const openMicrophoneMenu = (
 		initialSettings: MicrophoneWithDetails | null,
+		openSettingsWhenReady = false,
 	) => {
 		setEnableDeviceQueries(true);
 		setMicrophoneInitialSettings(initialSettings);
+		setOpenMicrophoneSettingsWhenReady(
+			openSettingsWhenReady && initialSettings === null,
+		);
 		setMicrophoneMenuOpen(true);
 		setDisplayMenuOpen(false);
 		setWindowMenuOpen(false);
@@ -2176,7 +2223,9 @@ function Page() {
 				}}
 				permissions={currentPermissions()}
 				onOpen={() => openCameraMenu(null)}
-				onOpenSettings={() => openCameraMenu(options.camera() ?? null)}
+				onOpenSettings={() =>
+					openCameraMenu(options.camera() ?? null, rawOptions.cameraID != null)
+				}
 			/>
 			<MicrophoneSelect
 				disabled={enableDeviceQueries() && devices.isPending}
@@ -2186,8 +2235,12 @@ function Page() {
 				permissions={currentPermissions()}
 				onOpen={() => openMicrophoneMenu(null)}
 				onOpenSettings={
-					options.micName()
-						? () => openMicrophoneMenu(options.micName() ?? null)
+					rawOptions.micName
+						? () =>
+								openMicrophoneMenu(
+									options.micName() ?? null,
+									rawOptions.micName != null,
+								)
 						: undefined
 				}
 			/>
