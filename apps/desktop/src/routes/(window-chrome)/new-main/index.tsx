@@ -1836,6 +1836,21 @@ function Page() {
 		setMicrophoneInitialSettings(null);
 	});
 
+	const setMicInput = createMutation(() => ({
+		mutationFn: async (name: string | null) => {
+			const previous = rawOptions.micName ?? null;
+			if (previous !== name) setOptions("micName", name);
+			try {
+				await commands.setMicInput(name);
+			} catch (error) {
+				if (previous !== name) setOptions("micName", previous);
+				throw error;
+			}
+		},
+	}));
+
+	const setCamera = createCameraMutation();
+
 	createUpdateCheck();
 
 	onMount(async () => {
@@ -1866,6 +1881,18 @@ function Page() {
 		}
 		setCanRevealMainWindow(true);
 		void emit("main-window-ready");
+
+		if (rawOptions.micName) {
+			setMicInput
+				.mutateAsync(rawOptions.micName)
+				.catch((error) => console.error("Failed to set mic input:", error));
+		}
+
+		if (rawOptions.cameraID) {
+			setCamera
+				.mutateAsync({ model: rawOptions.cameraID })
+				.catch((error) => console.error("Failed to set camera input:", error));
+		}
 
 		const unlistenFocus = currentWindow.onFocusChanged(
 			({ payload: focused }) => {
@@ -2082,21 +2109,6 @@ function Page() {
 			);
 		}
 	});
-
-	const setMicInput = createMutation(() => ({
-		mutationFn: async (name: string | null) => {
-			const previous = rawOptions.micName ?? null;
-			if (previous !== name) setOptions("micName", name);
-			try {
-				await commands.setMicInput(name);
-			} catch (error) {
-				if (previous !== name) setOptions("micName", previous);
-				throw error;
-			}
-		},
-	}));
-
-	const setCamera = createCameraMutation();
 
 	const license = createLicenseQuery();
 
