@@ -1515,6 +1515,18 @@ function Page() {
 		await recordingDeviceSettingsStore.set({
 			cameraDeviceSettings: next,
 		});
+
+		const selectedCameraId = rawOptions.cameraID;
+		if (!selectedCameraId || !findCamera([camera], selectedCameraId)) return;
+
+		const cameraWindowOpen = await commands
+			.isCameraWindowOpen()
+			.catch(() => false);
+		if (!cameraWindowOpen) return;
+
+		await commands.setCameraInput(selectedCameraId, true).catch((error) => {
+			console.error("Failed to refresh selected camera settings:", error);
+		});
 	};
 
 	const setMicrophoneDeviceSettings = async (
