@@ -253,23 +253,31 @@ impl BlurProcessor {
 
         let textures = self.textures.as_ref().expect("textures initialized above");
 
-        let blur_intensity = match mode {
-            BlurMode::Light => 0.75,
-            BlurMode::Heavy => 2.0,
+        let (blur_intensity, blur_passes) = match mode {
+            BlurMode::Light => (1.5, 1),
+            BlurMode::Heavy => (2.0, 3),
         };
 
-        self.blur_pipeline.blur_two_pass(
-            device,
-            encoder,
-            BlurPassInputs {
-                source: &input_view,
-                intermediate: &textures.blur_intermediate_view,
-                output: &textures.blurred_view,
-                width,
-                height,
-                intensity: blur_intensity,
-            },
-        );
+        for pass_index in 0..blur_passes {
+            let source = if pass_index == 0 {
+                &input_view
+            } else {
+                &textures.blurred_view
+            };
+
+            self.blur_pipeline.blur_two_pass(
+                device,
+                encoder,
+                BlurPassInputs {
+                    source,
+                    intermediate: &textures.blur_intermediate_view,
+                    output: &textures.blurred_view,
+                    width,
+                    height,
+                    intensity: blur_intensity,
+                },
+            );
+        }
 
         self.composite_pipeline.composite(
             device,
