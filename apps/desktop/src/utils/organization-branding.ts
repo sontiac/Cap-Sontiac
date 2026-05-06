@@ -85,6 +85,10 @@ type CachedAuthWithLocalSession = CachedAuthStore & {
 	user_id: string;
 };
 
+type AuthStorePatch = NonNullable<Parameters<typeof authStore.set>[0]> & {
+	organizations_updated_at?: number | null;
+};
+
 function isRecord(value: unknown): value is Record<string, unknown> {
 	return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -398,6 +402,38 @@ function getResponseError(body: unknown) {
 	return "Failed to update organization branding";
 }
 
+function mergeCachedOrganization(
+	organizations: unknown[] | undefined,
+	organization: DesktopOrganization,
+) {
+	const normalizedOrganizations = normalizeDesktopOrganizations(organizations);
+	const existingIndex = normalizedOrganizations.findIndex(
+		(cachedOrganization) => cachedOrganization.id === organization.id,
+	);
+
+	if (existingIndex === -1) {
+		return [...normalizedOrganizations, organization];
+	}
+
+	return normalizedOrganizations.map((cachedOrganization, index) =>
+		index === existingIndex ? organization : cachedOrganization,
+	);
+}
+
+async function updateCachedOrganization(organization: DesktopOrganization) {
+	const auth = (await authStore.get()) as CachedAuthStore | null;
+	const userId = auth?.user_id ?? null;
+	if (!hasLocalOrganizationAuth(auth)) return userId;
+
+	const patch: AuthStorePatch = {
+		organizations: mergeCachedOrganization(auth.organizations, organization),
+		organizations_updated_at: Math.floor(Date.now() / 1000),
+	};
+
+	await authStore.set(patch);
+	return userId;
+}
+
 export async function updateOrganizationBranding(
 	organizationId: string,
 	body: OrganizationBrandingPatchBody,
@@ -413,8 +449,17 @@ export async function updateOrganizationBranding(
 	}
 
 	const organization = DesktopOrganizationSchema.parse(response.body);
-	await commands.updateAuthPlan();
-	const auth = (await authStore.get()) as CachedAuthStore | null;
-	markOrganizationRefreshSuccess(auth?.user_id ?? null);
+	let userId: string | null = null;
+
+	try {
+		userId = await updateCachedOrganization(organization);
+		await commands.updateAuthPlan();
+		const auth = (await authStore.get()) as CachedAuthStore | null;
+		markOrganizationRefreshSuccess(auth?.user_id ?? userId);
+	} catch (error) {
+		markOrganizationRefreshFailure(userId);
+		console.error(error);
+	}
+
 	return organization;
 }
