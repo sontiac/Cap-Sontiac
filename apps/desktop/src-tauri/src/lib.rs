@@ -1168,17 +1168,22 @@ pub(crate) fn schedule_resume_recovery(app_handle: AppHandle) {
 
         #[cfg(target_os = "macos")]
         {
-            let prewarmer = app_handle.state::<crate::platform::ScreenCapturePrewarmer>();
-            prewarmer.request(true).await;
+            if let Some(prewarmer) =
+                app_handle.try_state::<crate::platform::ScreenCapturePrewarmer>()
+            {
+                prewarmer.request(true).await;
+            } else {
+                warn!("ScreenCapturePrewarmer state unavailable during resume recovery");
+            }
         }
 
         if !app_is_exiting(&app_handle) {
-            let _ = RequestScreenCapturePrewarm { force: true }.emit(&app_handle);
+            emit_app_event_safely(&app_handle, RequestScreenCapturePrewarm { force: true });
         }
 
         if !app_is_exiting(&app_handle) {
             let snapshot = get_devices_snapshot().await;
-            let _ = snapshot.emit(&app_handle);
+            emit_app_event_safely(&app_handle, snapshot);
         }
     });
 }
@@ -2488,7 +2493,9 @@ async fn set_project_config(
     editor_instance: WindowEditorInstance,
     config: ProjectConfiguration,
 ) -> Result<(), String> {
-    config.write(&editor_instance.project_path).unwrap();
+    config
+        .write(&editor_instance.project_path)
+        .map_err(|error| format!("Failed to write project config: {error}"))?;
 
     editor_instance.project_config.0.send(config).ok();
 
@@ -3443,8 +3450,10 @@ async fn set_camera_preview_state(
 #[specta::specta]
 #[instrument(skip(app))]
 fn set_camera_window_position(app: AppHandle, x: f64, y: f64) -> Result<(), String> {
-    let guard = app.state::<CameraWindowPositionGuard>();
-    if guard.should_ignore() {
+    if app
+        .try_state::<CameraWindowPositionGuard>()
+        .is_some_and(|guard| guard.should_ignore())
+    {
         return Ok(());
     }
 
@@ -4127,30 +4136,31 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
             Ok(())
         })
         .on_window_event(|window, event| {
-            let label = window.label();
-            let app = window.app_handle();
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let label = window.label();
+                let app = window.app_handle();
 
-            if matches!(
-                event,
-                WindowEvent::CloseRequested { .. }
-                    | WindowEvent::Moved(_)
-                    | WindowEvent::Focused(_)
-            ) && app_is_exiting(app)
-            {
-                return;
-            }
+                if matches!(
+                    event,
+                    WindowEvent::CloseRequested { .. }
+                        | WindowEvent::Moved(_)
+                        | WindowEvent::Focused(_)
+                ) && app_is_exiting(app)
+                {
+                    return;
+                }
 
-            match event {
-                WindowEvent::CloseRequested { api, .. } => {
-                    if let Ok(window_id) = CapWindowId::from_str(label) {
-                        match window_id {
-                            CapWindowId::Camera => {
-                                if app
-                                    .try_state::<CameraWindowCloseGate>()
-                                    .is_some_and(|close_gate| close_gate.allow_close())
-                                {
-                                    return;
-                                }
+                match event {
+                    WindowEvent::CloseRequested { api, .. } => {
+                        if let Ok(window_id) = CapWindowId::from_str(label) {
+                            match window_id {
+                                CapWindowId::Camera => {
+                                    if app
+                                        .try_state::<CameraWindowCloseGate>()
+                                        .is_some_and(|close_gate| close_gate.allow_close())
+                                    {
+                                        return;
+                                    }
 
                                 api.prevent_close();
                                 let _ = window.hide();
@@ -4448,8 +4458,10 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
                                 );
                             }
                             CapWindowId::Camera => {
-                                let guard = app.state::<CameraWindowPositionGuard>();
-                                if guard.should_ignore() {
+                                if app
+                                    .try_state::<CameraWindowPositionGuard>()
+                                    .is_some_and(|guard| guard.should_ignore())
+                                {
                                     return;
                                 }
                                 window_position_persistence::queue_camera_position(
@@ -4462,7 +4474,17 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
                         }
                     }
                 }
-                _ => {}
+                    _ => {}
+                }
+            }));
+
+            if let Err(panic) = result {
+                let message = panic_payload_message(&panic);
+                tracing::error!(panic = %message, "Suppressed panic in Tauri WindowEvent handler");
+                sentry::capture_message(
+                    &format!("Tauri WindowEvent panic suppressed: {message}"),
+                    sentry::Level::Error,
+                );
             }
         })
         .build(tauri_context)
@@ -4484,13 +4506,28 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
         });
 }
 
-fn panic_payload_message(payload: &(dyn std::any::Any + Send)) -> String {
+pub(crate) fn panic_payload_message(payload: &(dyn std::any::Any + Send)) -> String {
     if let Some(s) = payload.downcast_ref::<&'static str>() {
         (*s).to_string()
     } else if let Some(s) = payload.downcast_ref::<String>() {
         s.clone()
     } else {
         "<non-string panic payload>".to_string()
+    }
+}
+
+fn emit_app_event_safely<E>(app: &AppHandle, event: E)
+where
+    E: Event + Serialize + Clone,
+{
+    let event_name = std::any::type_name::<E>();
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| event.emit(app))) {
+        Ok(Ok(())) => {}
+        Ok(Err(error)) => warn!(event = event_name, %error, "Failed to emit app event"),
+        Err(panic) => {
+            let message = panic_payload_message(&panic);
+            error!(event = event_name, panic = %message, "Suppressed panic while emitting app event");
+        }
     }
 }
 
