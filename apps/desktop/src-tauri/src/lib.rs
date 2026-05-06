@@ -3139,6 +3139,7 @@ async fn check_upgraded_and_update(app: AppHandle) -> Result<bool, String> {
             last_checked: chrono::Utc::now().timestamp() as i32,
         }),
         organizations: auth.organizations,
+        organizations_updated_at: auth.organizations_updated_at,
     };
     println!("Updating auth store with new pro status");
     AuthStore::set(&app, Some(updated_auth)).map_err(|e| e.to_string())?;
