@@ -897,6 +897,7 @@ function Inner() {
 
 					async function showCropOptionsMenu(e: UIEvent) {
 						e.preventDefault();
+						e.stopPropagation();
 						const items = [
 							{
 								text: "Reset selection",
@@ -919,7 +920,6 @@ function Inner() {
 						];
 						const menu = await Menu.new({ items });
 						await menu.popup();
-						await menu.close();
 					}
 
 					// Spacing rules:
