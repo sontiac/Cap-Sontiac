@@ -44,15 +44,12 @@
 
 body {
 	overflow-x: hidden;
-	-webkit-font-smoothing: antialiased;
-	-moz-osx-font-smoothing: grayscale;
-	text-rendering: optimizeLegibility;
 }
 
 body,
 html {
-	color: #1a1a1a;
-	background-color: #fafafa;
+	color: #000000;
+	background-color: #f2f2f2;
 }
 .dashboard-grid {
 	display: grid;
@@ -336,7 +333,7 @@ h2,
 h3,
 h4,
 h5 {
-	@apply font-medium tracking-[-0.01em] text-gray-12;
+	@apply font-normal tracking-normal text-[1.75rem] leading-[2.5rem] md:text-[2.5rem] md:leading-[3.25rem];
 }
 
 a,
@@ -345,7 +342,7 @@ span,
 input,
 label,
 button {
-	@apply tracking-normal;
+	@apply tracking-normal leading-[1.5rem];
 }
 
 a {
