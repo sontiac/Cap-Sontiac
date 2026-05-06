@@ -137,13 +137,13 @@ const RecordingModePicker = () => {
 				transition={{ duration: 0.6 }}
 				className="text-center mb-8 md:mb-14"
 			>
-				<span className="inline-block text-xs font-semibold text-gray-9 uppercase tracking-[0.2em] mb-3">
-					3 Modes
+				<span className="mb-4 inline-flex items-center gap-2 rounded-full border border-gray-4 bg-white px-3 py-1 text-[11px] font-medium tracking-wide text-gray-10 uppercase">
+					<span className="size-1.5 rounded-full bg-gray-12" />3 modes
 				</span>
-				<h2 className="text-3xl md:text-4xl font-medium text-gray-12 mb-3">
+				<h2 className="text-3xl font-medium tracking-[-0.015em] text-gray-12 md:text-5xl">
 					One app, every workflow
 				</h2>
-				<p className="text-base md:text-lg text-gray-10 max-w-[600px] mx-auto">
+				<p className="mx-auto mt-4 max-w-[600px] text-base text-gray-10 md:text-lg">
 					Whether you need speed, studio quality, or a quick screenshot — Cap
 					has a mode for it.
 				</p>
@@ -210,7 +210,7 @@ const RecordingModePicker = () => {
 												layoutId="modeRing"
 												style={{
 													boxShadow:
-														"0 0 0 3px var(--gray-1), 0 0 0 5px var(--blue-9)",
+														"0 0 0 3px var(--gray-1), 0 0 0 5px var(--gray-12)",
 												}}
 												transition={{
 													type: "spring",
@@ -282,7 +282,7 @@ const RecordingModePicker = () => {
 												layoutId="modeRingMd"
 												style={{
 													boxShadow:
-														"0 0 0 3px var(--gray-1), 0 0 0 5.5px var(--blue-9)",
+														"0 0 0 3px var(--gray-1), 0 0 0 5.5px var(--gray-12)",
 												}}
 												transition={{
 													type: "spring",

@@ -148,11 +148,15 @@ const features: Feature[] = homepageCopy.features.features.map(
 
 const Features = () => {
 	return (
-		<div className="text-center max-w-[1440px] mx-auto px-5">
-			<h1 className="mb-3 text-4xl font-medium text-gray-12">
+		<div className="mx-auto max-w-[1440px] px-5 text-center">
+			<span className="mb-4 inline-flex items-center gap-2 rounded-full border border-gray-4 bg-white px-3 py-1 text-[11px] font-medium tracking-wide text-gray-10 uppercase">
+				<span className="size-1.5 rounded-full bg-gray-12" />
+				Features
+			</span>
+			<h2 className="text-3xl font-medium tracking-[-0.015em] text-gray-12 md:text-5xl">
 				{homepageCopy.features.title}
-			</h1>
-			<p className="text-lg text-gray-10 leading-[1.75rem] w-full max-w-[600px] mx-auto">
+			</h2>
+			<p className="mx-auto mt-4 w-full max-w-[600px] text-base leading-relaxed text-gray-10 md:text-lg">
 				{homepageCopy.features.subtitle}
 			</p>
 			<div className="flex flex-col gap-4 mt-[52px]">
@@ -200,13 +204,12 @@ const Features = () => {
 				</div>
 			</div>
 
-			<div className="mt-10">
-				{/* View all features button */}
+			<div className="mt-12">
 				<Button
 					href="/features"
-					variant="dark"
-					size="lg"
-					className="inline-flex"
+					variant="outline"
+					size="md"
+					className="inline-flex !h-11 !px-5 !text-[14px]"
 				>
 					View all features
 				</Button>
@@ -239,7 +242,7 @@ const FeatureCard = ({
 	return (
 		<div
 			className={clsx(
-				"flex flex-col gap-10 justify-evenly p-6 text-left rounded-xl border md:p-8 bg-gray-1 border-gray-5",
+				"flex flex-col gap-10 justify-evenly p-6 text-left rounded-2xl border md:p-8 bg-white border-gray-4",
 				className,
 			)}
 		>
