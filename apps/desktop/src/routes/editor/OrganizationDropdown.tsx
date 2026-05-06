@@ -19,9 +19,11 @@ import {
 	EMPTY_ORGANIZATION_BRAND_COLORS,
 	encodeFileAsBase64,
 	ORGANIZATION_BRAND_COLOR_DEFAULTS,
+	ORGANIZATION_BRAND_COLOR_KEYS,
 	ORGANIZATION_BRAND_COLOR_LABELS,
 	ORGANIZATION_LOGO_CONTENT_TYPES,
 	ORGANIZATION_LOGO_MAX_BYTES,
+	type OrganizationBrandColorKey,
 	type OrganizationBrandColors,
 	updateOrganizationBranding,
 } from "~/utils/organization-branding";
@@ -43,14 +45,6 @@ import {
 	topCenterAnimateClasses,
 } from "./ui";
 
-const ORGANIZATION_BRAND_COLOR_KEYS = [
-	"primary",
-	"secondary",
-	"accent",
-	"background",
-] as const;
-
-type OrganizationBrandColorKey = (typeof ORGANIZATION_BRAND_COLOR_KEYS)[number];
 type OrganizationLogoContentType =
 	(typeof ORGANIZATION_LOGO_CONTENT_TYPES)[number];
 
