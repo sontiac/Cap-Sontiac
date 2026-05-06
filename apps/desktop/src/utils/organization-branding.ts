@@ -382,13 +382,15 @@ export function createSelectedOrganization() {
 export async function encodeFileAsBase64(file: File) {
 	const bytes = new Uint8Array(await file.arrayBuffer());
 	const chunkSize = 0x8000;
-	let binary = "";
+	const chunks: string[] = [];
 
 	for (let index = 0; index < bytes.length; index += chunkSize) {
-		binary += String.fromCharCode(...bytes.subarray(index, index + chunkSize));
+		chunks.push(
+			String.fromCharCode(...bytes.subarray(index, index + chunkSize)),
+		);
 	}
 
-	return btoa(binary);
+	return btoa(chunks.join(""));
 }
 
 function getResponseError(body: unknown) {
