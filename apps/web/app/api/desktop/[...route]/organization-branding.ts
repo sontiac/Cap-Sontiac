@@ -211,16 +211,17 @@ export function decodeOrganizationLogoUpdate(
 		throw new OrganizationBrandingValidationError("Invalid logo data");
 	}
 
-	const buffer = Buffer.from(logo.data, "base64");
-	if (buffer.byteLength === 0) {
+	const decodedLength = Buffer.byteLength(logo.data, "base64");
+	if (decodedLength === 0) {
 		throw new OrganizationBrandingValidationError("Logo file is empty");
 	}
-	if (buffer.byteLength > MAX_ORGANIZATION_LOGO_BYTES) {
+	if (decodedLength > MAX_ORGANIZATION_LOGO_BYTES) {
 		throw new OrganizationBrandingValidationError(
 			"Logo file must be less than 1MB",
 		);
 	}
 
+	const buffer = Buffer.from(logo.data, "base64");
 	const data = new Uint8Array(buffer);
 	if (!isImageDataForContentType(data, logo.contentType)) {
 		throw new OrganizationBrandingValidationError("Logo file type is invalid");
