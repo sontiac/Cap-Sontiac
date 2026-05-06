@@ -510,6 +510,8 @@ app.patch(
 			);
 		}
 
+		await applyOrganizationLogoUpdate(row, logoUpdate);
+
 		await db()
 			.update(organizations)
 			.set({
@@ -519,8 +521,6 @@ app.patch(
 				),
 			})
 			.where(eq(organizations.id, organizationId));
-
-		await applyOrganizationLogoUpdate(row, logoUpdate);
 
 		const [updatedRow] = await db()
 			.select({
