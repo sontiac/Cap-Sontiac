@@ -664,6 +664,10 @@ function getErrorMessage(err: unknown): string {
 	return err instanceof Error ? err.message : String(err);
 }
 
+function isGoogleDriveResumableUrl(url: string): boolean {
+	return url.includes("googleapis.com/upload/drive/");
+}
+
 async function uploadWithRetry(
 	presignedUrl: string,
 	contentType: string,
@@ -674,12 +678,18 @@ async function uploadWithRetry(
 
 	for (let attempt = 0; attempt <= MAX_UPLOAD_RETRIES; attempt++) {
 		try {
+			const headers: Record<string, string> = {
+				"Content-Type": contentType,
+				"Content-Length": contentLength.toString(),
+			};
+			if (isGoogleDriveResumableUrl(presignedUrl) && contentLength > 0) {
+				headers["Content-Range"] =
+					`bytes 0-${contentLength - 1}/${contentLength}`;
+			}
+
 			const response = await fetch(presignedUrl, {
 				method: "PUT",
-				headers: {
-					"Content-Type": contentType,
-					"Content-Length": contentLength.toString(),
-				},
+				headers,
 				body: bodyFactory(),
 				signal: AbortSignal.timeout(UPLOAD_TIMEOUT_MS),
 			});
@@ -689,7 +699,7 @@ async function uploadWithRetry(
 			}
 
 			const responseError = new Error(
-				`S3 upload failed: ${response.status} ${response.statusText}`,
+				`Storage upload failed: ${response.status} ${response.statusText}`,
 			);
 
 			if (
