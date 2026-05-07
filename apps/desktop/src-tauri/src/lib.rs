@@ -4204,8 +4204,12 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
 
             #[cfg(target_os = "macos")]
             RequestScreenCapturePrewarm::listen_any_spawn(&app, async |event, app| {
-                let prewarmer = app.state::<crate::platform::ScreenCapturePrewarmer>();
-                prewarmer.request(event.force).await;
+                if let Some(prewarmer) = app.try_state::<crate::platform::ScreenCapturePrewarmer>()
+                {
+                    prewarmer.request(event.force).await;
+                } else {
+                    warn!("ScreenCapturePrewarmer state unavailable during prewarm request");
+                }
             });
 
             let app_handle = app.clone();
