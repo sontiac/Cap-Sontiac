@@ -637,6 +637,19 @@ export class Storage extends Effect.Service<Storage>()("Storage", {
 		const repo = yield* StorageRepo;
 		const s3Buckets = yield* S3Buckets;
 
+		const getS3WritableAccessForUser = Effect.fn(
+			"Storage.getS3WritableAccessForUser",
+		)(function* (userId: User.UserId) {
+			const [s3, customBucket] = yield* mapStorageError(
+				s3Buckets.getBucketAccessForUser(userId),
+			);
+			return {
+				access: makeS3Access(s3),
+				bucketId: Option.map(customBucket, (bucket) => bucket.id),
+				storageIntegrationId: Option.none(),
+			};
+		});
+
 		const getDriveAccess = Effect.fn("Storage.getDriveAccess")(function* (
 			integrationId: StorageDomain.StorageIntegrationId,
 		) {
@@ -676,14 +689,7 @@ export class Storage extends Effect.Service<Storage>()("Storage", {
 				};
 			}
 
-			const [s3, customBucket] = yield* mapStorageError(
-				s3Buckets.getBucketAccessForUser(userId),
-			);
-			return {
-				access: makeS3Access(s3),
-				bucketId: Option.map(customBucket, (bucket) => bucket.id),
-				storageIntegrationId: Option.none(),
-			};
+			return yield* getS3WritableAccessForUser(userId);
 		});
 
 		const getAccessForVideo = Effect.fn("Storage.getAccessForVideo")(function* (
@@ -716,6 +722,7 @@ export class Storage extends Effect.Service<Storage>()("Storage", {
 		});
 
 		return {
+			getS3WritableAccessForUser,
 			getWritableAccessForUser,
 			getAccessForVideo,
 			createUploadTargetForUser,
@@ -727,6 +734,10 @@ export class Storage extends Effect.Service<Storage>()("Storage", {
 	static getWritableAccessForUser = (userId: User.UserId) =>
 		Effect.flatMap(Storage, (storage) =>
 			storage.getWritableAccessForUser(userId),
+		);
+	static getS3WritableAccessForUser = (userId: User.UserId) =>
+		Effect.flatMap(Storage, (storage) =>
+			storage.getS3WritableAccessForUser(userId),
 		);
 	static getAccessForVideo = (video: Video.Video) =>
 		Effect.flatMap(Storage, (storage) => storage.getAccessForVideo(video));
