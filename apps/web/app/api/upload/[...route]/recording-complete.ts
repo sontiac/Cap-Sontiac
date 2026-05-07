@@ -13,6 +13,9 @@ import { runPromise } from "@/lib/server";
 import { decodeStorageVideo } from "@/lib/video-storage";
 import { withAuth } from "../../utils";
 
+const MEDIA_SERVER_PRESIGNED_GET_EXPIRES_SECONDS = 3 * 60 * 60;
+const MEDIA_SERVER_PRESIGNED_PUT_EXPIRES_SECONDS = 3 * 60 * 60;
+
 export const app = new Hono().post(
 	"/",
 	withAuth,
@@ -108,6 +111,7 @@ export const app = new Hono().post(
 
 				const videoInitUrl = yield* bucket.getSignedObjectUrl(
 					segSource.getVideoInitKey(),
+					{ expiresIn: MEDIA_SERVER_PRESIGNED_GET_EXPIRES_SECONDS },
 				);
 
 				const videoSegmentUrls = yield* Effect.all(
@@ -115,6 +119,9 @@ export const app = new Hono().post(
 						const entry = Video.normalizeSegmentEntry(seg);
 						return bucket.getSignedObjectUrl(
 							segSource.getVideoSegmentKey(entry.index),
+							{
+								expiresIn: MEDIA_SERVER_PRESIGNED_GET_EXPIRES_SECONDS,
+							},
 						);
 					}),
 					{ concurrency: "unbounded" },
@@ -129,12 +136,16 @@ export const app = new Hono().post(
 				) {
 					audioInitUrl = yield* bucket.getSignedObjectUrl(
 						segSource.getAudioInitKey(),
+						{ expiresIn: MEDIA_SERVER_PRESIGNED_GET_EXPIRES_SECONDS },
 					);
 					audioSegmentUrls = yield* Effect.all(
 						manifest.audio_segments.map((seg) => {
 							const entry = Video.normalizeSegmentEntry(seg);
 							return bucket.getSignedObjectUrl(
 								segSource.getAudioSegmentKey(entry.index),
+								{
+									expiresIn: MEDIA_SERVER_PRESIGNED_GET_EXPIRES_SECONDS,
+								},
 							);
 						}),
 						{ concurrency: "unbounded" },
@@ -149,12 +160,14 @@ export const app = new Hono().post(
 					{
 						ContentType: "video/mp4",
 					},
+					{ expiresIn: MEDIA_SERVER_PRESIGNED_PUT_EXPIRES_SECONDS },
 				);
 				const thumbnailPresignedUrl = yield* bucket.getInternalPresignedPutUrl(
 					thumbnailKey,
 					{
 						ContentType: "image/jpeg",
 					},
+					{ expiresIn: MEDIA_SERVER_PRESIGNED_PUT_EXPIRES_SECONDS },
 				);
 
 				return {
