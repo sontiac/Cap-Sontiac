@@ -97,8 +97,8 @@ p{font-size:15px;line-height:1.5;color:#555;margin:0}
 </head>
 <body>
 <main>
-<h1>${title}</h1>
-<p>${body}</p>
+<h1>${escapeHtml(title)}</h1>
+<p>${escapeHtml(body)}</p>
 </main>
 </body>
 </html>`;
@@ -244,7 +244,14 @@ protectedApp.delete("/google-drive/disconnect", async (c) => {
 	const user = c.get("user");
 	await db()
 		.update(storageIntegrations)
-		.set({ active: false, status: "disconnected" })
+		.set({
+			active: false,
+			status: "disconnected",
+			googleDriveAccessToken: null,
+			googleDriveAccessTokenExpiresAt: null,
+			googleDriveTokenRefreshLeaseId: null,
+			googleDriveTokenRefreshLeaseExpiresAt: null,
+		})
 		.where(
 			and(
 				eq(storageIntegrations.ownerId, user.id),
@@ -357,6 +364,10 @@ app.get("/google-drive/callback", async (c) => {
 						status: "active",
 						active: true,
 						encryptedConfig,
+						googleDriveAccessToken: null,
+						googleDriveAccessTokenExpiresAt: null,
+						googleDriveTokenRefreshLeaseId: null,
+						googleDriveTokenRefreshLeaseExpiresAt: null,
 					})
 					.where(eq(storageIntegrations.id, reusable.id));
 				return;
