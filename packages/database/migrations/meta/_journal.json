@@ -141,6 +141,13 @@
 			"when": 1778154209547,
 			"tag": "0019_solid_paibok",
 			"breakpoints": true
+		},
+		{
+			"idx": 20,
+			"version": "5",
+			"when": 1778157016497,
+			"tag": "0020_orange_talkback",
+			"breakpoints": true
 		}
 	]
 }

@@ -33,6 +33,14 @@ import { relations } from "drizzle-orm/relations";
 import { nanoIdLength } from "./helpers.ts";
 import type { VideoMetadata } from "./types/index.ts";
 
+type GoogleDriveStorageQuotaCache = {
+	limit?: string | null;
+	usage?: string | null;
+	usageInDrive?: string | null;
+	usageInDriveTrash?: string | null;
+	fetchedAt: string;
+};
+
 const nanoId = customType<{ data: string; notNull: true }>({
 	dataType() {
 		return `varchar(${nanoIdLength})`;
@@ -596,6 +604,9 @@ export const storageIntegrations = mysqlTable(
 		googleDriveTokenRefreshLeaseExpiresAt: timestamp(
 			"googleDriveTokenRefreshLeaseExpiresAt",
 		),
+		googleDriveStorageQuotaCache: json(
+			"googleDriveStorageQuotaCache",
+		).$type<GoogleDriveStorageQuotaCache>(),
 		createdAt: timestamp("createdAt").notNull().defaultNow(),
 		updatedAt: timestamp("updatedAt").notNull().defaultNow().onUpdateNow(),
 	},
