@@ -308,6 +308,75 @@ describe("InstantRecordingUploader", () => {
 		);
 	});
 
+	it("finalizes Google Drive streamed chunks with a concrete total byte count", async () => {
+		const totalBytes = DRIVE_PART_BYTES + 4 * 1024 * 1024;
+		const fetchMock = vi.fn(
+			async (input: RequestInfo | URL, init?: RequestInit) => {
+				const url = input.toString();
+				const body = init?.body ? JSON.parse(init.body as string) : null;
+
+				if (url === "/api/upload/multipart/presign-part") {
+					return makeJsonResponse({
+						presignedUrl: `https://www.googleapis.com/upload/drive/v3/files/session-${body.partNumber}`,
+						provider: "googleDrive",
+					});
+				}
+
+				if (url === "/api/upload/multipart/complete") {
+					expect(body.parts).toEqual([
+						expect.objectContaining({
+							partNumber: 1,
+							etag: "drive-1",
+							size: DRIVE_PART_BYTES,
+						}),
+						expect.objectContaining({
+							partNumber: 2,
+							etag: "drive-2",
+							size: 4 * 1024 * 1024,
+						}),
+					]);
+					return makeJsonResponse({ success: true });
+				}
+
+				throw new Error(`Unexpected fetch call: ${url}`);
+			},
+		);
+
+		vi.stubGlobal("fetch", fetchMock);
+		MockXMLHttpRequest.setOutcomes([
+			{ type: "success", status: 308 },
+			{ type: "success", status: 200 },
+		]);
+
+		const uploader = new InstantRecordingUploader({
+			videoId,
+			uploadId: "drive-session",
+			provider: "googleDrive",
+			mimeType: "video/webm",
+			subpath: "raw-upload.webm",
+			setUploadStatus: vi.fn(),
+			sendProgressUpdate: vi.fn().mockResolvedValue(undefined),
+		});
+
+		uploader.handleChunk(
+			makeBlob(10 * 1024 * 1024, "video/webm"),
+			10 * 1024 * 1024,
+		);
+		uploader.handleChunk(makeBlob(10 * 1024 * 1024, "video/webm"), totalBytes);
+
+		await uploader.finalize({
+			durationSeconds: 20,
+			subpath: "raw-upload.webm",
+		});
+
+		expect(MockXMLHttpRequest.recordedHeaders[0]?.get("content-range")).toBe(
+			`bytes 0-${DRIVE_PART_BYTES - 1}/*`,
+		);
+		expect(MockXMLHttpRequest.recordedHeaders[1]?.get("content-range")).toBe(
+			`bytes ${DRIVE_PART_BYTES}-${totalBytes - 1}/${totalBytes}`,
+		);
+	});
+
 	it("completes multipart uploads with parts ordered by part number", async () => {
 		const fetchMock = vi.fn(
 			async (input: RequestInfo | URL, init?: RequestInit) => {
