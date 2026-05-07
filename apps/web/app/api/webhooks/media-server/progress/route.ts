@@ -93,6 +93,7 @@ export async function POST(request: NextRequest) {
 					.set({
 						width: payload.metadata.width,
 						height: payload.metadata.height,
+						fps: payload.metadata.fps,
 						...(duration === undefined ? {} : { duration }),
 					})
 					.where(eq(videos.id, payload.videoId as Video.VideoId));
