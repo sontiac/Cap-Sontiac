@@ -6,6 +6,7 @@ import { Video } from "@cap/web-domain";
 import { eq } from "drizzle-orm";
 import { FatalError } from "workflow";
 import { runPromise } from "@/lib/server";
+import { decodeStorageVideo } from "@/lib/video-storage";
 
 interface ProcessVideoWorkflowPayload {
 	videoId: string;
@@ -231,14 +232,7 @@ async function processVideoOnMediaServer(
 		throw new FatalError("Video does not exist");
 	}
 
-	const videoDomain = Video.Video.decodeSync({
-		...video,
-		bucketId: video.bucket,
-		storageIntegrationId: video.storageIntegrationId,
-		createdAt: video.createdAt.toISOString(),
-		updatedAt: video.updatedAt.toISOString(),
-		metadata: video.metadata,
-	});
+	const videoDomain = decodeStorageVideo(video);
 
 	const [bucket] =
 		await Storage.getAccessForVideo(videoDomain).pipe(runPromise);
@@ -374,14 +368,7 @@ async function cleanupRawUpload(
 
 		if (!video) return;
 
-		const videoDomain = Video.Video.decodeSync({
-			...video,
-			bucketId: video.bucket,
-			storageIntegrationId: video.storageIntegrationId,
-			createdAt: video.createdAt.toISOString(),
-			updatedAt: video.updatedAt.toISOString(),
-			metadata: video.metadata,
-		});
+		const videoDomain = decodeStorageVideo(video);
 
 		const [bucket] =
 			await Storage.getAccessForVideo(videoDomain).pipe(runPromise);

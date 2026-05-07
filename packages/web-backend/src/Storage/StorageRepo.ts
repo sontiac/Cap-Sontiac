@@ -394,32 +394,21 @@ export class StorageRepo extends Effect.Service<StorageRepo>()("StorageRepo", {
 				prefix: string | undefined,
 				maxKeys: number | undefined,
 			) =>
-				db
-					.use((db) => {
-						const where = prefix
-							? Dz.and(
-									Dz.eq(Db.storageObjects.integrationId, integrationId),
-									Dz.like(
-										Db.storageObjects.objectKey,
-										`${escapeLikePattern(prefix)}%`,
-									),
-								)
-							: Dz.eq(Db.storageObjects.integrationId, integrationId);
+				db.use((db) => {
+					const where = prefix
+						? Dz.and(
+								Dz.eq(Db.storageObjects.integrationId, integrationId),
+								Dz.sql`BINARY ${Db.storageObjects.objectKey} LIKE ${`${escapeLikePattern(prefix)}%`}`,
+							)
+						: Dz.eq(Db.storageObjects.integrationId, integrationId);
 
-						return db
-							.select()
-							.from(Db.storageObjects)
-							.where(where)
-							.orderBy(Db.storageObjects.objectKey)
-							.limit(maxKeys ?? 1000);
-					})
-					.pipe(
-						Effect.map((objects) =>
-							objects.filter((object) =>
-								prefix ? object.objectKey.startsWith(prefix) : true,
-							),
-						),
-					),
+					return db
+						.select()
+						.from(Db.storageObjects)
+						.where(where)
+						.orderBy(Db.storageObjects.objectKey)
+						.limit(maxKeys ?? 1000);
+				}),
 		);
 
 		const markObjectComplete = Effect.fn("StorageRepo.markObjectComplete")(

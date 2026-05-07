@@ -199,7 +199,7 @@ protectedApp.post(
 		const user = c.get("user");
 		const { provider } = c.req.valid("json");
 
-		await db().transaction(async (tx) => {
+		const activated = await db().transaction(async (tx) => {
 			const [driveToActivate] =
 				provider === "googleDrive"
 					? await tx
@@ -219,8 +219,8 @@ protectedApp.post(
 							.limit(1)
 					: [];
 
-			if (provider === "googleDrive") {
-				if (!driveToActivate) throw new Error("Google Drive is not connected");
+			if (provider === "googleDrive" && !driveToActivate) {
+				return false;
 			}
 
 			await tx
@@ -234,7 +234,13 @@ protectedApp.post(
 					.set({ active: true })
 					.where(eq(storageIntegrations.id, driveToActivate.id));
 			}
+
+			return true;
 		});
+
+		if (!activated) {
+			return c.json({ error: "not_connected" }, { status: 404 });
+		}
 
 		return c.json({ success: true });
 	},
