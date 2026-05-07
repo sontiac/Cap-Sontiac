@@ -15,6 +15,7 @@ import {
 	createGoogleDriveResumableUpload,
 	deleteGoogleDriveFile,
 	GOOGLE_DRIVE_FOLDER_MIME_TYPE,
+	type GoogleDriveTokenStore,
 	getGoogleDriveFileMetadata,
 	getGoogleDriveObjectResponse,
 	getGoogleDriveObjectText,
@@ -121,6 +122,33 @@ const mapStorageError = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
 	effect.pipe(
 		Effect.mapError((cause) => new StorageDomain.StorageError({ cause })),
 	);
+
+const makeGoogleDriveTokenStore = (
+	repo: StorageRepo,
+	integration: typeof Db.storageIntegrations.$inferSelect,
+): GoogleDriveTokenStore => ({
+	cacheKey: integration.id,
+	getInitialAccessTokenCache: () =>
+		mapStorageError(repo.getGoogleDriveAccessTokenCache(integration)),
+	getAccessTokenCache: () =>
+		mapStorageError(repo.getGoogleDriveAccessTokenCacheById(integration.id)),
+	claimRefreshLease: (leaseId, expiresAt) =>
+		mapStorageError(
+			repo.claimGoogleDriveTokenRefreshLease(
+				integration.id,
+				leaseId,
+				expiresAt,
+			),
+		),
+	saveAccessTokenCache: (leaseId, cache) =>
+		mapStorageError(
+			repo.saveGoogleDriveAccessTokenCache(integration.id, leaseId, cache),
+		),
+	releaseRefreshLease: (leaseId) =>
+		mapStorageError(
+			repo.releaseGoogleDriveTokenRefreshLease(integration.id, leaseId),
+		),
+});
 
 const makeS3Access = (s3: S3BucketAccess) => ({
 	provider: "s3" as const,
@@ -260,6 +288,7 @@ const makeGoogleDriveAccess = ({
 }) => {
 	const integrationId = integration.id;
 	const ownerId = integration.ownerId;
+	const tokenStore = makeGoogleDriveTokenStore(repo, integration);
 
 	const getObjectRecord = (key: string) =>
 		mapStorageError(requireDriveObject(repo, integrationId, key));
@@ -274,7 +303,7 @@ const makeGoogleDriveAccess = ({
 		getObject: (key: string) =>
 			getObjectRecord(key).pipe(
 				Effect.flatMap((object) =>
-					getGoogleDriveObjectText(config, object.providerObjectId),
+					getGoogleDriveObjectText(config, object.providerObjectId, tokenStore),
 				),
 				Effect.map(Option.some),
 				Effect.catchTag("StorageError", () => Effect.succeed(Option.none())),
@@ -312,7 +341,11 @@ const makeGoogleDriveAccess = ({
 		headObject: (key: string) =>
 			getObjectRecord(key).pipe(
 				Effect.flatMap((object) =>
-					getGoogleDriveFileMetadata(config, object.providerObjectId).pipe(
+					getGoogleDriveFileMetadata(
+						config,
+						object.providerObjectId,
+						tokenStore,
+					).pipe(
 						Effect.map((metadata) => ({
 							ContentLength: metadata.size
 								? Number(metadata.size)
@@ -349,6 +382,7 @@ const makeGoogleDriveAccess = ({
 						contentType,
 						contentLength,
 					},
+					tokenStore,
 				).pipe(mapStorageError);
 				const response = yield* Effect.tryPromise({
 					try: () =>
@@ -396,13 +430,18 @@ const makeGoogleDriveAccess = ({
 								sourceObject.contentType ??
 								"application/octet-stream",
 						},
+						tokenStore,
 					}).pipe(mapStorageError),
 				),
 			),
 		deleteObject: (key: string) =>
 			getObjectRecord(key).pipe(
 				Effect.flatMap((object) =>
-					deleteGoogleDriveFile(config, object.providerObjectId).pipe(
+					deleteGoogleDriveFile(
+						config,
+						object.providerObjectId,
+						tokenStore,
+					).pipe(
 						Effect.catchAll(() => Effect.void),
 						Effect.flatMap(() =>
 							mapStorageError(repo.deleteObjectByKey(integrationId, key)),
@@ -418,7 +457,11 @@ const makeGoogleDriveAccess = ({
 					object.Key
 						? getObjectRecord(object.Key).pipe(
 								Effect.flatMap((record) =>
-									deleteGoogleDriveFile(config, record.providerObjectId).pipe(
+									deleteGoogleDriveFile(
+										config,
+										record.providerObjectId,
+										tokenStore,
+									).pipe(
 										Effect.catchAll(() => Effect.void),
 										Effect.flatMap(() =>
 											mapStorageError(
@@ -439,32 +482,42 @@ const makeGoogleDriveAccess = ({
 			key: string,
 			args?: Omit<S3.PutObjectRequest, "Key" | "Bucket">,
 		) =>
-			createGoogleDriveResumableUpload(repo, config, {
-				integrationId,
-				ownerId,
-				videoId: parseVideoIdFromObjectKey(key).pipe(
-					Option.map((id) => id as Video.VideoId),
-					Option.getOrNull,
-				),
-				key,
-				contentType: args?.ContentType ?? "application/octet-stream",
-				contentLength: args?.ContentLength,
-			}).pipe(mapStorageError),
+			createGoogleDriveResumableUpload(
+				repo,
+				config,
+				{
+					integrationId,
+					ownerId,
+					videoId: parseVideoIdFromObjectKey(key).pipe(
+						Option.map((id) => id as Video.VideoId),
+						Option.getOrNull,
+					),
+					key,
+					contentType: args?.ContentType ?? "application/octet-stream",
+					contentLength: args?.ContentLength,
+				},
+				tokenStore,
+			).pipe(mapStorageError),
 		getInternalPresignedPutUrl: (
 			key: string,
 			args?: Omit<S3.PutObjectRequest, "Key" | "Bucket">,
 		) =>
-			createGoogleDriveResumableUpload(repo, config, {
-				integrationId,
-				ownerId,
-				videoId: parseVideoIdFromObjectKey(key).pipe(
-					Option.map((id) => id as Video.VideoId),
-					Option.getOrNull,
-				),
-				key,
-				contentType: args?.ContentType ?? "application/octet-stream",
-				contentLength: args?.ContentLength,
-			}).pipe(mapStorageError),
+			createGoogleDriveResumableUpload(
+				repo,
+				config,
+				{
+					integrationId,
+					ownerId,
+					videoId: parseVideoIdFromObjectKey(key).pipe(
+						Option.map((id) => id as Video.VideoId),
+						Option.getOrNull,
+					),
+					key,
+					contentType: args?.ContentType ?? "application/octet-stream",
+					contentLength: args?.ContentLength,
+				},
+				tokenStore,
+			).pipe(mapStorageError),
 		getPresignedPostUrl: (key: string) =>
 			Effect.fail(
 				new StorageDomain.StorageError({
@@ -478,16 +531,21 @@ const makeGoogleDriveAccess = ({
 				key: string,
 				args?: Omit<S3.CreateMultipartUploadCommandInput, "Bucket" | "Key">,
 			) =>
-				createGoogleDriveResumableUpload(repo, config, {
-					integrationId,
-					ownerId,
-					videoId: parseVideoIdFromObjectKey(key).pipe(
-						Option.map((id) => id as Video.VideoId),
-						Option.getOrNull,
-					),
-					key,
-					contentType: args?.ContentType ?? "application/octet-stream",
-				}).pipe(
+				createGoogleDriveResumableUpload(
+					repo,
+					config,
+					{
+						integrationId,
+						ownerId,
+						videoId: parseVideoIdFromObjectKey(key).pipe(
+							Option.map((id) => id as Video.VideoId),
+							Option.getOrNull,
+						),
+						key,
+						contentType: args?.ContentType ?? "application/octet-stream",
+					},
+					tokenStore,
+				).pipe(
 					mapStorageError,
 					Effect.map((UploadId) => ({ UploadId })),
 				),
@@ -510,7 +568,11 @@ const makeGoogleDriveAccess = ({
 			) =>
 				getObjectRecord(key).pipe(
 					Effect.flatMap((object) =>
-						getGoogleDriveFileMetadata(config, object.providerObjectId),
+						getGoogleDriveFileMetadata(
+							config,
+							object.providerObjectId,
+							tokenStore,
+						),
 					),
 					Effect.flatMap((metadata) =>
 						mapStorageError(
@@ -537,24 +599,34 @@ const makeGoogleDriveAccess = ({
 				),
 		},
 		createUploadTarget: (key: string, input: UploadTargetInput) =>
-			createGoogleDriveResumableUpload(repo, config, {
-				integrationId,
-				ownerId,
-				videoId: parseVideoIdFromObjectKey(key).pipe(
-					Option.map((id) => id as Video.VideoId),
-					Option.getOrNull,
-				),
-				key,
-				contentType: input.contentType,
-				contentLength: input.contentLength,
-			}).pipe(
+			createGoogleDriveResumableUpload(
+				repo,
+				config,
+				{
+					integrationId,
+					ownerId,
+					videoId: parseVideoIdFromObjectKey(key).pipe(
+						Option.map((id) => id as Video.VideoId),
+						Option.getOrNull,
+					),
+					key,
+					contentType: input.contentType,
+					contentLength: input.contentLength,
+				},
+				tokenStore,
+			).pipe(
 				mapStorageError,
 				Effect.map((url) => toDriveUploadTarget(url, input.contentType)),
 			),
 		getObjectResponse: (key: string, range?: string | null) =>
 			getObjectRecord(key).pipe(
 				Effect.flatMap((object) =>
-					getGoogleDriveObjectResponse(config, object.providerObjectId, range),
+					getGoogleDriveObjectResponse(
+						config,
+						object.providerObjectId,
+						range,
+						tokenStore,
+					),
 				),
 			),
 	};
