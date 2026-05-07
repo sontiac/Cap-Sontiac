@@ -22,7 +22,12 @@ import { z } from "zod";
 import { invalidateGoogleDriveStorageQuotaCache } from "@/lib/google-drive-storage-quota";
 import { runPromise } from "@/lib/server";
 import { decodeStorageVideo } from "@/lib/video-storage";
-import { isFromDesktopSemver, UPLOAD_PROGRESS_VERSION } from "@/utils/desktop";
+import {
+	GOOGLE_DRIVE_UPLOAD_FEATURE,
+	hasDesktopFeature,
+	isFromDesktopSemver,
+	UPLOAD_PROGRESS_VERSION,
+} from "@/utils/desktop";
 import { stringOrNumberOptional } from "@/utils/zod";
 import { withAuth } from "../../utils";
 
@@ -165,9 +170,14 @@ app.get(
 			const videoName =
 				name ??
 				`Cap ${isScreenshot ? "Screenshot" : "Recording"} - ${formattedDate}`;
-			const writable = await Storage.getWritableAccessForUser(user.id).pipe(
-				runPromise,
+			const clientSupportsGoogleDriveUpload = hasDesktopFeature(
+				c.req,
+				GOOGLE_DRIVE_UPLOAD_FEATURE,
 			);
+			const writable = await (clientSupportsGoogleDriveUpload
+				? Storage.getWritableAccessForUser(user.id)
+				: Storage.getS3WritableAccessForUser(user.id)
+			).pipe(runPromise);
 
 			await db()
 				.insert(videos)
