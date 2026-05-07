@@ -1,7 +1,9 @@
+import { createHash, randomUUID } from "node:crypto";
 import { serverEnv } from "@cap/env";
 import { Storage, type User, type Video } from "@cap/web-domain";
 import { Effect, Option, Schedule } from "effect";
 import type {
+	GoogleDriveAccessTokenCache,
 	GoogleDriveIntegrationConfig,
 	GoogleDriveStorageQuota,
 	StorageRepo,
@@ -37,6 +39,29 @@ type GoogleDriveTokenResponse = {
 	refresh_token?: string;
 };
 
+export type GoogleDriveTokenStore = {
+	cacheKey: string;
+	getInitialAccessTokenCache: () => Effect.Effect<
+		Option.Option<GoogleDriveAccessTokenCache>,
+		Storage.StorageError
+	>;
+	getAccessTokenCache: () => Effect.Effect<
+		Option.Option<GoogleDriveAccessTokenCache>,
+		Storage.StorageError
+	>;
+	claimRefreshLease: (
+		leaseId: string,
+		expiresAt: Date,
+	) => Effect.Effect<boolean, Storage.StorageError>;
+	saveAccessTokenCache: (
+		leaseId: string,
+		cache: GoogleDriveAccessTokenCache,
+	) => Effect.Effect<boolean, Storage.StorageError>;
+	releaseRefreshLease: (
+		leaseId: string,
+	) => Effect.Effect<unknown, Storage.StorageError>;
+};
+
 export type CreateGoogleDriveUploadInput = {
 	integrationId: Storage.StorageIntegrationId;
 	ownerId: User.UserId;
@@ -63,6 +88,31 @@ const assertDriveResponse = async (response: Response) => {
 
 const escapeDriveQueryValue = (value: string) =>
 	value.replace(/\\/g, "\\\\").replace(/'/g, "\\'");
+
+const GOOGLE_DRIVE_ACCESS_TOKEN_EXPIRY_MARGIN_MS = 60_000;
+const GOOGLE_DRIVE_TOKEN_REFRESH_LEASE_MS = 15_000;
+const googleDriveAccessTokenCache = new Map<
+	string,
+	GoogleDriveAccessTokenCache
+>();
+const googleDriveAccessTokenRefreshes = new Map<
+	string,
+	Promise<GoogleDriveAccessTokenCache>
+>();
+
+const getGoogleDriveAccessTokenCacheKey = (
+	config: GoogleDriveIntegrationConfig,
+) => createHash("sha256").update(config.refreshToken).digest("hex");
+
+const isGoogleDriveAccessTokenFresh = (
+	token: GoogleDriveAccessTokenCache | undefined,
+	invalidAccessToken?: string,
+) =>
+	Boolean(
+		token &&
+			token.expiresAt.getTime() > Date.now() &&
+			token.accessToken !== invalidAccessToken,
+	);
 
 export const getGoogleDriveAuthUrl = ({ state }: { state: string }) => {
 	const env = serverEnv();
@@ -114,33 +164,223 @@ export const exchangeGoogleDriveCode = (code: string) =>
 		catch: (cause) => new Storage.StorageError({ cause }),
 	});
 
-export const refreshGoogleDriveAccessToken = (
+const fetchGoogleDriveAccessToken = async (
 	config: GoogleDriveIntegrationConfig,
+): Promise<GoogleDriveAccessTokenCache> => {
+	const env = serverEnv();
+	if (!env.GOOGLE_CLIENT_ID || !env.GOOGLE_CLIENT_SECRET) {
+		throw new Error("Google OAuth is not configured");
+	}
+
+	const response = await fetch("https://oauth2.googleapis.com/token", {
+		method: "POST",
+		headers: { "Content-Type": "application/x-www-form-urlencoded" },
+		body: new URLSearchParams({
+			client_id: env.GOOGLE_CLIENT_ID,
+			client_secret: env.GOOGLE_CLIENT_SECRET,
+			refresh_token: config.refreshToken,
+			grant_type: "refresh_token",
+		}),
+	});
+
+	await assertDriveResponse(response);
+	const token = await parseDriveJson<GoogleDriveTokenResponse>(response);
+	if (!token.access_token) {
+		throw new Error("Google did not return an access token");
+	}
+
+	const ttlMs = Math.max(
+		(token.expires_in ?? 3600) * 1000 -
+			GOOGLE_DRIVE_ACCESS_TOKEN_EXPIRY_MARGIN_MS,
+		0,
+	);
+	return {
+		accessToken: token.access_token,
+		expiresAt: new Date(Date.now() + ttlMs),
+	};
+};
+
+const fetchLocalGoogleDriveAccessToken = (
+	config: GoogleDriveIntegrationConfig,
+	cacheKey: string,
 ) =>
 	Effect.tryPromise({
 		try: async () => {
-			const env = serverEnv();
-			if (!env.GOOGLE_CLIENT_ID || !env.GOOGLE_CLIENT_SECRET) {
-				throw new Error("Google OAuth is not configured");
-			}
+			const currentRefresh = googleDriveAccessTokenRefreshes.get(cacheKey);
+			if (currentRefresh) return currentRefresh;
 
-			const response = await fetch("https://oauth2.googleapis.com/token", {
-				method: "POST",
-				headers: { "Content-Type": "application/x-www-form-urlencoded" },
-				body: new URLSearchParams({
-					client_id: env.GOOGLE_CLIENT_ID,
-					client_secret: env.GOOGLE_CLIENT_SECRET,
-					refresh_token: config.refreshToken,
-					grant_type: "refresh_token",
-				}),
+			const refresh = fetchGoogleDriveAccessToken(config).finally(() => {
+				googleDriveAccessTokenRefreshes.delete(cacheKey);
 			});
+			googleDriveAccessTokenRefreshes.set(cacheKey, refresh);
+			const token = await refresh;
+			googleDriveAccessTokenCache.set(cacheKey, token);
+			return token;
+		},
+		catch: (cause) => new Storage.StorageError({ cause }),
+	});
 
-			await assertDriveResponse(response);
-			const token = await parseDriveJson<GoogleDriveTokenResponse>(response);
-			if (!token.access_token) {
-				throw new Error("Google did not return an access token");
+const readFreshPersistedGoogleDriveAccessToken = (
+	tokenStore: GoogleDriveTokenStore,
+	cacheKey: string,
+	invalidAccessToken?: string,
+) =>
+	tokenStore.getAccessTokenCache().pipe(
+		Effect.flatMap(
+			Option.match({
+				onNone: () =>
+					Effect.fail(
+						new Storage.StorageError({
+							cause: new Error("Google Drive access token is not cached"),
+						}),
+					),
+				onSome: (token) => {
+					if (!isGoogleDriveAccessTokenFresh(token, invalidAccessToken)) {
+						return Effect.fail(
+							new Storage.StorageError({
+								cause: new Error("Google Drive access token cache is stale"),
+							}),
+						);
+					}
+
+					googleDriveAccessTokenCache.set(cacheKey, token);
+					return Effect.succeed(token);
+				},
+			}),
+		),
+	);
+
+const refreshPersistedGoogleDriveAccessToken = (
+	config: GoogleDriveIntegrationConfig,
+	tokenStore: GoogleDriveTokenStore,
+	cacheKey: string,
+	invalidAccessToken?: string,
+): Effect.Effect<GoogleDriveAccessTokenCache, Storage.StorageError> =>
+	Effect.gen(function* () {
+		const leaseId = randomUUID();
+		const leaseExpiresAt = new Date(
+			Date.now() + GOOGLE_DRIVE_TOKEN_REFRESH_LEASE_MS,
+		);
+		const claimed = yield* tokenStore.claimRefreshLease(
+			leaseId,
+			leaseExpiresAt,
+		);
+
+		if (!claimed) {
+			return yield* readFreshPersistedGoogleDriveAccessToken(
+				tokenStore,
+				cacheKey,
+				invalidAccessToken,
+			).pipe(
+				Effect.retry({
+					times: 8,
+					schedule: Schedule.exponential("100 millis"),
+				}),
+				Effect.catchAll(() =>
+					refreshPersistedGoogleDriveAccessToken(
+						config,
+						tokenStore,
+						cacheKey,
+						invalidAccessToken,
+					),
+				),
+			);
+		}
+
+		const token = yield* Effect.tryPromise({
+			try: () => fetchGoogleDriveAccessToken(config),
+			catch: (cause) => new Storage.StorageError({ cause }),
+		}).pipe(Effect.tapError(() => tokenStore.releaseRefreshLease(leaseId)));
+		const saved = yield* tokenStore.saveAccessTokenCache(leaseId, token);
+		if (!saved) {
+			return yield* readFreshPersistedGoogleDriveAccessToken(
+				tokenStore,
+				cacheKey,
+				invalidAccessToken,
+			);
+		}
+		googleDriveAccessTokenCache.set(cacheKey, token);
+		return token;
+	});
+
+const loadGoogleDriveAccessToken = (
+	config: GoogleDriveIntegrationConfig,
+	forceRefresh: boolean,
+	tokenStore?: GoogleDriveTokenStore,
+	invalidAccessToken?: string,
+) =>
+	Effect.gen(function* () {
+		const cacheKey =
+			tokenStore?.cacheKey ?? getGoogleDriveAccessTokenCacheKey(config);
+		const cached = googleDriveAccessTokenCache.get(cacheKey);
+		if (
+			!forceRefresh &&
+			isGoogleDriveAccessTokenFresh(cached, invalidAccessToken)
+		) {
+			return cached as GoogleDriveAccessTokenCache;
+		}
+		if (forceRefresh) googleDriveAccessTokenCache.delete(cacheKey);
+
+		if (!forceRefresh && tokenStore) {
+			const initialToken = yield* tokenStore.getInitialAccessTokenCache();
+			if (
+				Option.isSome(initialToken) &&
+				isGoogleDriveAccessTokenFresh(initialToken.value, invalidAccessToken)
+			) {
+				googleDriveAccessTokenCache.set(cacheKey, initialToken.value);
+				return initialToken.value;
 			}
-			return token.access_token;
+		}
+
+		if (tokenStore) {
+			return yield* refreshPersistedGoogleDriveAccessToken(
+				config,
+				tokenStore,
+				cacheKey,
+				invalidAccessToken,
+			);
+		}
+
+		return yield* fetchLocalGoogleDriveAccessToken(config, cacheKey);
+	});
+
+export const refreshGoogleDriveAccessToken = (
+	config: GoogleDriveIntegrationConfig,
+	tokenStore?: GoogleDriveTokenStore,
+	invalidAccessToken?: string,
+) =>
+	loadGoogleDriveAccessToken(config, true, tokenStore, invalidAccessToken).pipe(
+		Effect.map((token) => token.accessToken),
+	);
+
+const getCachedGoogleDriveAccessToken = (
+	config: GoogleDriveIntegrationConfig,
+	tokenStore?: GoogleDriveTokenStore,
+) =>
+	loadGoogleDriveAccessToken(config, false, tokenStore).pipe(
+		Effect.map((token) => token.accessToken),
+	);
+
+const clearCachedGoogleDriveAccessToken = (
+	config: GoogleDriveIntegrationConfig,
+	tokenStore?: GoogleDriveTokenStore,
+) =>
+	Effect.sync(() => {
+		googleDriveAccessTokenCache.delete(
+			tokenStore?.cacheKey ?? getGoogleDriveAccessTokenCacheKey(config),
+		);
+	});
+
+const sendDriveRequest = (
+	accessToken: string,
+	url: string,
+	init?: RequestInit,
+) =>
+	Effect.tryPromise({
+		try: () => {
+			const headers = new Headers(init?.headers);
+			headers.set("Authorization", `Bearer ${accessToken}`);
+			return fetch(url, { ...init, headers });
 		},
 		catch: (cause) => new Storage.StorageError({ cause }),
 	});
@@ -149,19 +389,28 @@ const driveFetch = (
 	config: GoogleDriveIntegrationConfig,
 	url: string,
 	init?: RequestInit,
+	tokenStore?: GoogleDriveTokenStore,
 ) =>
 	Effect.gen(function* () {
-		const accessToken = yield* refreshGoogleDriveAccessToken(config);
-		return yield* Effect.tryPromise({
-			try: async () => {
-				const headers = new Headers(init?.headers);
-				headers.set("Authorization", `Bearer ${accessToken}`);
-				const response = await fetch(url, { ...init, headers });
-				await assertDriveResponse(response);
-				return response;
-			},
+		const accessToken = yield* getCachedGoogleDriveAccessToken(
+			config,
+			tokenStore,
+		);
+		let response = yield* sendDriveRequest(accessToken, url, init);
+		if (response.status === 401) {
+			yield* clearCachedGoogleDriveAccessToken(config, tokenStore);
+			const refreshedAccessToken = yield* refreshGoogleDriveAccessToken(
+				config,
+				tokenStore,
+				accessToken,
+			);
+			response = yield* sendDriveRequest(refreshedAccessToken, url, init);
+		}
+		yield* Effect.tryPromise({
+			try: () => assertDriveResponse(response),
 			catch: (cause) => new Storage.StorageError({ cause }),
 		});
+		return response;
 	});
 
 const getDriveFileName = (key: string) => {
@@ -185,8 +434,16 @@ const getDriveFolderObjectKey = (folderPath: string) =>
 const getDriveWarningObjectKey = (folderPath: string) =>
 	`${DRIVE_WARNING_OBJECT_PREFIX}/${folderPath}/${DRIVE_WARNING_FILE_NAME}`;
 
-export const getGoogleDriveUserEmail = (config: GoogleDriveIntegrationConfig) =>
-	driveFetch(config, `${DRIVE_API_BASE}/about?fields=user(emailAddress)`).pipe(
+export const getGoogleDriveUserEmail = (
+	config: GoogleDriveIntegrationConfig,
+	tokenStore?: GoogleDriveTokenStore,
+) =>
+	driveFetch(
+		config,
+		`${DRIVE_API_BASE}/about?fields=user(emailAddress)`,
+		undefined,
+		tokenStore,
+	).pipe(
 		Effect.flatMap((response) =>
 			Effect.tryPromise({
 				try: async () => {
@@ -202,10 +459,13 @@ export const getGoogleDriveUserEmail = (config: GoogleDriveIntegrationConfig) =>
 
 export const getGoogleDriveStorageQuota = (
 	config: GoogleDriveIntegrationConfig,
+	tokenStore?: GoogleDriveTokenStore,
 ) =>
 	driveFetch(
 		config,
 		`${DRIVE_API_BASE}/about?fields=storageQuota(limit,usage,usageInDrive,usageInDriveTrash)`,
+		undefined,
+		tokenStore,
 	).pipe(
 		Effect.flatMap((response) =>
 			Effect.tryPromise({
@@ -224,6 +484,7 @@ export const ensureGoogleDriveFolder = (
 	config: GoogleDriveIntegrationConfig,
 	name: string,
 	parentId?: string,
+	tokenStore?: GoogleDriveTokenStore,
 ) =>
 	Effect.gen(function* () {
 		const query = [
@@ -233,7 +494,12 @@ export const ensureGoogleDriveFolder = (
 			...(parentId ? [`'${escapeDriveQueryValue(parentId)}' in parents`] : []),
 		].join(" and ");
 		const listUrl = `${DRIVE_API_BASE}/files?q=${encodeURIComponent(query)}&fields=files(id,name)&spaces=drive`;
-		const listResponse = yield* driveFetch(config, listUrl);
+		const listResponse = yield* driveFetch(
+			config,
+			listUrl,
+			undefined,
+			tokenStore,
+		);
 		const listBody = yield* Effect.tryPromise({
 			try: () => parseDriveJson<GoogleDriveListResponse>(listResponse),
 			catch: (cause) => new Storage.StorageError({ cause }),
@@ -253,6 +519,7 @@ export const ensureGoogleDriveFolder = (
 					...(parentId ? { parents: [parentId] } : {}),
 				}),
 			},
+			tokenStore,
 		);
 
 		const created = yield* Effect.tryPromise({
@@ -274,17 +541,23 @@ const createGoogleDriveFolderWithId = (
 	id: string,
 	name: string,
 	parentId: string,
+	tokenStore?: GoogleDriveTokenStore,
 ) =>
-	driveFetch(config, `${DRIVE_API_BASE}/files?fields=id,name`, {
-		method: "POST",
-		headers: { "Content-Type": "application/json" },
-		body: JSON.stringify({
-			id,
-			name,
-			mimeType: GOOGLE_DRIVE_FOLDER_MIME_TYPE,
-			parents: [parentId],
-		}),
-	}).pipe(Effect.asVoid);
+	driveFetch(
+		config,
+		`${DRIVE_API_BASE}/files?fields=id,name`,
+		{
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({
+				id,
+				name,
+				mimeType: GOOGLE_DRIVE_FOLDER_MIME_TYPE,
+				parents: [parentId],
+			}),
+		},
+		tokenStore,
+	).pipe(Effect.asVoid);
 
 const createGoogleDriveTextFileWithId = ({
 	config,
@@ -292,12 +565,14 @@ const createGoogleDriveTextFileWithId = ({
 	name,
 	parentId,
 	content,
+	tokenStore,
 }: {
 	config: GoogleDriveIntegrationConfig;
 	id: string;
 	name: string;
 	parentId: string;
 	content: string;
+	tokenStore?: GoogleDriveTokenStore;
 }) => {
 	const boundary = `cap_drive_boundary_${id}`;
 	const metadata = JSON.stringify({
@@ -327,6 +602,7 @@ const createGoogleDriveTextFileWithId = ({
 			headers: { "Content-Type": `multipart/related; boundary=${boundary}` },
 			body,
 		},
+		tokenStore,
 	).pipe(Effect.asVoid);
 };
 
@@ -355,8 +631,8 @@ const waitForReservedGoogleDriveObject = (
 			}),
 		),
 		Effect.retry({
-			times: 150,
-			schedule: Schedule.spaced("100 millis"),
+			times: 8,
+			schedule: Schedule.exponential("100 millis"),
 		}),
 	);
 
@@ -367,6 +643,7 @@ const getOrCreateGoogleDriveFolder = ({
 	folderPath,
 	name,
 	parentId,
+	tokenStore,
 }: {
 	repo: StorageRepo;
 	config: GoogleDriveIntegrationConfig;
@@ -374,6 +651,7 @@ const getOrCreateGoogleDriveFolder = ({
 	folderPath: string;
 	name: string;
 	parentId: string;
+	tokenStore?: GoogleDriveTokenStore;
 }) =>
 	Effect.gen(function* () {
 		const folderObjectKey = getDriveFolderObjectKey(folderPath);
@@ -392,7 +670,7 @@ const getOrCreateGoogleDriveFolder = ({
 			);
 		}
 
-		const folderId = yield* generateGoogleDriveFileId(config);
+		const folderId = yield* generateGoogleDriveFileId(config, tokenStore);
 		const reserved = yield* repo.reserveObject({
 			integrationId: input.integrationId,
 			ownerId: input.ownerId,
@@ -416,7 +694,13 @@ const getOrCreateGoogleDriveFolder = ({
 			);
 		}
 
-		yield* createGoogleDriveFolderWithId(config, folderId, name, parentId).pipe(
+		yield* createGoogleDriveFolderWithId(
+			config,
+			folderId,
+			name,
+			parentId,
+			tokenStore,
+		).pipe(
 			Effect.tapError(() =>
 				repo.deleteObjectByKey(input.integrationId, folderObjectKey),
 			),
@@ -431,12 +715,14 @@ const ensureGoogleDriveWarningFile = ({
 	input,
 	folderPath,
 	parentId,
+	tokenStore,
 }: {
 	repo: StorageRepo;
 	config: GoogleDriveIntegrationConfig;
 	input: CreateGoogleDriveUploadInput;
 	folderPath: string;
 	parentId: string;
+	tokenStore?: GoogleDriveTokenStore;
 }) =>
 	Effect.gen(function* () {
 		const warningObjectKey = getDriveWarningObjectKey(folderPath);
@@ -454,7 +740,7 @@ const ensureGoogleDriveWarningFile = ({
 			return;
 		}
 
-		const warningFileId = yield* generateGoogleDriveFileId(config);
+		const warningFileId = yield* generateGoogleDriveFileId(config, tokenStore);
 		const reserved = yield* repo.reserveObject({
 			integrationId: input.integrationId,
 			ownerId: input.ownerId,
@@ -486,6 +772,7 @@ const ensureGoogleDriveWarningFile = ({
 			name: DRIVE_WARNING_FILE_NAME,
 			parentId,
 			content: DRIVE_WARNING_TEXT,
+			tokenStore,
 		}).pipe(
 			Effect.tapError(() =>
 				repo.deleteObjectByKey(input.integrationId, warningObjectKey),
@@ -502,6 +789,7 @@ const getGoogleDriveUploadParentId = (
 	repo: StorageRepo,
 	config: GoogleDriveIntegrationConfig,
 	input: CreateGoogleDriveUploadInput,
+	tokenStore?: GoogleDriveTokenStore,
 ) =>
 	Effect.gen(function* () {
 		const folderParts = getDriveFolderParts(input.key);
@@ -519,6 +807,7 @@ const getGoogleDriveUploadParentId = (
 				folderPath: pathParts.join("/"),
 				name: folderName,
 				parentId,
+				tokenStore,
 			});
 			if (pathParts.length === 1) {
 				videoFolderId = parentId;
@@ -533,16 +822,22 @@ const getGoogleDriveUploadParentId = (
 				input,
 				folderPath: videoFolderPath,
 				parentId: videoFolderId,
+				tokenStore,
 			});
 		}
 
 		return parentId;
 	});
 
-const generateGoogleDriveFileId = (config: GoogleDriveIntegrationConfig) =>
+const generateGoogleDriveFileId = (
+	config: GoogleDriveIntegrationConfig,
+	tokenStore?: GoogleDriveTokenStore,
+) =>
 	driveFetch(
 		config,
 		`${DRIVE_API_BASE}/files/generateIds?count=1&space=drive&type=files`,
+		undefined,
+		tokenStore,
 	).pipe(
 		Effect.flatMap((response) =>
 			Effect.tryPromise({
@@ -561,12 +856,13 @@ export const createGoogleDriveResumableUpload = (
 	repo: StorageRepo,
 	config: GoogleDriveIntegrationConfig,
 	input: CreateGoogleDriveUploadInput,
+	tokenStore?: GoogleDriveTokenStore,
 ) =>
 	Effect.gen(function* () {
 		const contentType = normalizeContentType(input.contentType);
 		const [parentId, fileId] = yield* Effect.all([
-			getGoogleDriveUploadParentId(repo, config, input),
-			generateGoogleDriveFileId(config),
+			getGoogleDriveUploadParentId(repo, config, input, tokenStore),
+			generateGoogleDriveFileId(config, tokenStore),
 		]);
 		const headers: Record<string, string> = {
 			"Content-Type": "application/json; charset=UTF-8",
@@ -592,6 +888,7 @@ export const createGoogleDriveResumableUpload = (
 					},
 				}),
 			},
+			tokenStore,
 		);
 		const uploadUrl = response.headers.get("Location");
 		if (!uploadUrl) {
@@ -625,10 +922,13 @@ export const createGoogleDriveResumableUpload = (
 export const getGoogleDriveFileMetadata = (
 	config: GoogleDriveIntegrationConfig,
 	fileId: string,
+	tokenStore?: GoogleDriveTokenStore,
 ) =>
 	driveFetch(
 		config,
 		`${DRIVE_API_BASE}/files/${encodeURIComponent(fileId)}?fields=id,name,mimeType,size`,
+		undefined,
+		tokenStore,
 	).pipe(
 		Effect.flatMap((response) =>
 			Effect.tryPromise({
@@ -641,10 +941,13 @@ export const getGoogleDriveFileMetadata = (
 export const getGoogleDriveObjectText = (
 	config: GoogleDriveIntegrationConfig,
 	fileId: string,
+	tokenStore?: GoogleDriveTokenStore,
 ) =>
 	driveFetch(
 		config,
 		`${DRIVE_API_BASE}/files/${encodeURIComponent(fileId)}?alt=media`,
+		undefined,
+		tokenStore,
 	).pipe(
 		Effect.flatMap((response) =>
 			Effect.tryPromise({
@@ -658,6 +961,7 @@ export const getGoogleDriveObjectResponse = (
 	config: GoogleDriveIntegrationConfig,
 	fileId: string,
 	range?: string | null,
+	tokenStore?: GoogleDriveTokenStore,
 ) =>
 	Effect.gen(function* () {
 		const headers: Record<string, string> = {};
@@ -666,6 +970,7 @@ export const getGoogleDriveObjectResponse = (
 			config,
 			`${DRIVE_API_BASE}/files/${encodeURIComponent(fileId)}?alt=media`,
 			{ headers },
+			tokenStore,
 		);
 		return response;
 	});
@@ -673,24 +978,37 @@ export const getGoogleDriveObjectResponse = (
 export const deleteGoogleDriveFile = (
 	config: GoogleDriveIntegrationConfig,
 	fileId: string,
+	tokenStore?: GoogleDriveTokenStore,
 ) =>
-	driveFetch(config, `${DRIVE_API_BASE}/files/${encodeURIComponent(fileId)}`, {
-		method: "DELETE",
-	}).pipe(Effect.asVoid);
+	driveFetch(
+		config,
+		`${DRIVE_API_BASE}/files/${encodeURIComponent(fileId)}`,
+		{
+			method: "DELETE",
+		},
+		tokenStore,
+	).pipe(Effect.asVoid);
 
 export const copyGoogleDriveFile = ({
 	repo,
 	config,
 	sourceFileId,
 	input,
+	tokenStore,
 }: {
 	repo: StorageRepo;
 	config: GoogleDriveIntegrationConfig;
 	sourceFileId: string;
 	input: CreateGoogleDriveUploadInput;
+	tokenStore?: GoogleDriveTokenStore;
 }) =>
 	Effect.gen(function* () {
-		const parentId = yield* getGoogleDriveUploadParentId(repo, config, input);
+		const parentId = yield* getGoogleDriveUploadParentId(
+			repo,
+			config,
+			input,
+			tokenStore,
+		);
 		const response = yield* driveFetch(
 			config,
 			`${DRIVE_API_BASE}/files/${encodeURIComponent(sourceFileId)}/copy?fields=id,name,mimeType,size`,
@@ -705,6 +1023,7 @@ export const copyGoogleDriveFile = ({
 					},
 				}),
 			},
+			tokenStore,
 		);
 		const copied = yield* Effect.tryPromise({
 			try: () => parseDriveJson<GoogleDriveFile>(response),
