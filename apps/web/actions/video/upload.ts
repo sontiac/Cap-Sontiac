@@ -141,6 +141,8 @@ export async function createVideoAndGetUploadUrl({
 				.where(eq(videos.id, videoId));
 
 			if (existingVideo) {
+				if (existingVideo.ownerId !== user.id) throw new Error("Forbidden");
+
 				const existingVideoDomain = Video.Video.decodeSync({
 					...existingVideo,
 					bucketId: existingVideo.bucket,
