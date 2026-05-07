@@ -36,9 +36,14 @@ export function verifyStorageObjectToken(token: string) {
 	if (signatureBuffer.length !== expectedBuffer.length) return null;
 	if (!timingSafeEqual(signatureBuffer, expectedBuffer)) return null;
 
-	const payload = JSON.parse(
-		Buffer.from(encodedPayload, "base64url").toString("utf8"),
-	) as StorageObjectTokenPayload;
+	let payload: StorageObjectTokenPayload;
+	try {
+		payload = JSON.parse(
+			Buffer.from(encodedPayload, "base64url").toString("utf8"),
+		) as StorageObjectTokenPayload;
+	} catch {
+		return null;
+	}
 
 	if (payload.expiresAt < Date.now()) return null;
 	return payload;
