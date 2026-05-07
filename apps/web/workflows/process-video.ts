@@ -1,12 +1,12 @@
 import { db } from "@cap/database";
 import { videos, videoUploads } from "@cap/database/schema";
 import { serverEnv } from "@cap/env";
-import { S3Buckets } from "@cap/web-backend";
-import type { S3Bucket, Video } from "@cap/web-domain";
+import { Storage } from "@cap/web-backend";
+import { Video } from "@cap/web-domain";
 import { eq } from "drizzle-orm";
-import { Option } from "effect";
 import { FatalError } from "workflow";
 import { runPromise } from "@/lib/server";
+import { decodeStorageVideo } from "@/lib/video-storage";
 
 interface ProcessVideoWorkflowPayload {
 	videoId: string;
@@ -48,7 +48,7 @@ export async function processVideoWorkflow(
 		);
 
 		await saveMetadataAndComplete(videoId, result.metadata);
-		await cleanupRawUpload(rawFileKey, bucketId);
+		await cleanupRawUpload(videoId, rawFileKey);
 
 		return {
 			success: true,
@@ -212,7 +212,7 @@ async function processVideoOnMediaServer(
 	videoId: string,
 	userId: string,
 	rawFileKey: string,
-	bucketId: string | null,
+	_bucketId: string | null,
 ): Promise<MediaServerProcessResult> {
 	"use step";
 
@@ -223,9 +223,19 @@ async function processVideoOnMediaServer(
 		throw new FatalError("MEDIA_SERVER_URL is not configured");
 	}
 
-	const [bucket] = await S3Buckets.getBucketAccess(
-		Option.fromNullable(bucketId as S3Bucket.S3BucketId | null),
-	).pipe(runPromise);
+	const [video] = await db()
+		.select()
+		.from(videos)
+		.where(eq(videos.id, Video.VideoId.make(videoId)));
+
+	if (!video) {
+		throw new FatalError("Video does not exist");
+	}
+
+	const videoDomain = decodeStorageVideo(video);
+
+	const [bucket] =
+		await Storage.getAccessForVideo(videoDomain).pipe(runPromise);
 
 	const rawVideoUrl = await bucket
 		.getInternalSignedObjectUrl(rawFileKey)
@@ -345,15 +355,23 @@ async function saveMetadataAndComplete(
 }
 
 async function cleanupRawUpload(
+	videoId: string,
 	rawFileKey: string,
-	bucketId: string | null,
 ): Promise<void> {
 	"use step";
 
 	try {
-		const [bucket] = await S3Buckets.getBucketAccess(
-			Option.fromNullable(bucketId as S3Bucket.S3BucketId | null),
-		).pipe(runPromise);
+		const [video] = await db()
+			.select()
+			.from(videos)
+			.where(eq(videos.id, Video.VideoId.make(videoId)));
+
+		if (!video) return;
+
+		const videoDomain = decodeStorageVideo(video);
+
+		const [bucket] =
+			await Storage.getAccessForVideo(videoDomain).pipe(runPromise);
 
 		await bucket.deleteObject(rawFileKey).pipe(runPromise);
 	} catch (error) {
