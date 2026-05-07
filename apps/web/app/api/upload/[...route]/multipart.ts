@@ -28,6 +28,9 @@ import {
 
 export const app = new Hono().use(withAuth);
 
+const MEDIA_SERVER_PRESIGNED_GET_EXPIRES_SECONDS = 3 * 60 * 60;
+const MEDIA_SERVER_PRESIGNED_PUT_EXPIRES_SECONDS = 3 * 60 * 60;
+
 const runPromiseAnyEnv = runPromise as <A, E>(
 	effect: Effect.Effect<A, E, unknown>,
 ) => Promise<A>;
@@ -521,7 +524,10 @@ app.post(
 						video.source.type === "webMP4" &&
 						mediaServerUrl
 					) {
-						const inputUrl = yield* bucket.getInternalSignedObjectUrl(fileKey);
+						const webhookSecret = serverEnv().MEDIA_SERVER_WEBHOOK_SECRET;
+						const inputUrl = yield* bucket.getInternalSignedObjectUrl(fileKey, {
+							expiresIn: MEDIA_SERVER_PRESIGNED_GET_EXPIRES_SECONDS,
+						});
 						const outputPresignedUrl = yield* bucket.getInternalPresignedPutUrl(
 							fileKey,
 							{
@@ -532,6 +538,7 @@ app.post(
 									source: "cap-multipart-upload",
 								},
 							},
+							{ expiresIn: MEDIA_SERVER_PRESIGNED_PUT_EXPIRES_SECONDS },
 						);
 
 						yield* Effect.tryPromise({
@@ -540,7 +547,12 @@ app.post(
 									`${mediaServerUrl}/video/process`,
 									{
 										method: "POST",
-										headers: { "Content-Type": "application/json" },
+										headers: {
+											"Content-Type": "application/json",
+											...(webhookSecret
+												? { "x-media-server-secret": webhookSecret }
+												: {}),
+										},
 										body: JSON.stringify({
 											videoId,
 											userId: user.id,
