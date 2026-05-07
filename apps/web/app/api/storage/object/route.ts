@@ -5,7 +5,7 @@ import {
 	VideosRepo,
 	verifyStorageObjectToken,
 } from "@cap/web-backend";
-import { Video } from "@cap/web-domain";
+import { Storage as StorageDomain, Video } from "@cap/web-domain";
 import { Effect, Option } from "effect";
 import type { NextRequest } from "next/server";
 import { runPromise } from "@/lib/server";
@@ -21,6 +21,58 @@ const copyHeader = (
 ) => {
 	const value = source.get(sourceName);
 	if (value) target.set(targetName, value);
+};
+
+const asRecord = (value: unknown): Record<string, unknown> | null =>
+	typeof value === "object" && value !== null
+		? (value as Record<string, unknown>)
+		: null;
+
+const getErrorTag = (error: unknown) => {
+	const record = asRecord(error);
+	const tag = record?._tag;
+	return typeof tag === "string" ? tag : null;
+};
+
+const getErrorText = (error: unknown): string => {
+	if (error instanceof Error) {
+		const record = asRecord(error);
+		const cause = record?.cause;
+		if (cause !== undefined && cause !== error) {
+			return `${error.message} ${getErrorText(cause)}`;
+		}
+		return error.message;
+	}
+	if (typeof error === "string") return error;
+	const record = asRecord(error);
+	const cause = record?.cause;
+	if (cause !== undefined && cause !== error) return getErrorText(cause);
+	return String(error);
+};
+
+const isStorageError = (error: unknown) =>
+	error instanceof StorageDomain.StorageError ||
+	getErrorTag(error) === "StorageError";
+
+const isObjectNotFoundError = (error: unknown) => {
+	if (error === "not-found") return true;
+	if (!isStorageError(error)) return false;
+	const message = getErrorText(error);
+	return (
+		message.includes("Storage object not found") ||
+		message.includes("Google Drive object not found") ||
+		message.includes("Google Drive request failed: 404")
+	);
+};
+
+const toProxyErrorResponse = (error: unknown) => {
+	if (isObjectNotFoundError(error)) {
+		return new Response("Not found", { status: 404 });
+	}
+	if (isStorageError(error)) {
+		return new Response("Storage upstream error", { status: 502 });
+	}
+	return new Response("Not found", { status: 404 });
 };
 
 const getTokenVideo = (videoId: Video.VideoId) =>
@@ -89,8 +141,8 @@ export async function GET(request: NextRequest) {
 
 	try {
 		return await runPromise(effect);
-	} catch {
-		return new Response("Not found", { status: 404 });
+	} catch (error) {
+		return toProxyErrorResponse(error);
 	}
 }
 
