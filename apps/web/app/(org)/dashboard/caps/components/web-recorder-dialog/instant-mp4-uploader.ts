@@ -431,6 +431,13 @@ export class InstantRecordingUploader {
 		return finalBlob.slice(start, end, this.mimeType);
 	}
 
+	private resolveFinalTotalBytes(finalBlob?: Blob | null) {
+		return (
+			finalBlob?.size ??
+			Math.max(this.totalRecordedBytes, this.queuedBytes + this.bufferedBytes)
+		);
+	}
+
 	private enqueueUpload(part: Blob) {
 		if (this.pendingUploadBytes + part.size > MAX_PENDING_UPLOAD_BYTES) {
 			const error = this.markFatalError(
@@ -784,7 +791,17 @@ export class InstantRecordingUploader {
 			throw this.fatalError;
 		}
 
-		if (options.finalBlob) {
+		const finalTotalBytes = this.resolveFinalTotalBytes(options.finalBlob);
+
+		if (this.provider === "googleDrive") {
+			if (finalTotalBytes <= 0) {
+				throw new Error(
+					"Cannot finalize Google Drive upload without a byte count",
+				);
+			}
+			this.finalTotalBytes = finalTotalBytes;
+			this.totalRecordedBytes = finalTotalBytes;
+		} else if (options.finalBlob) {
 			this.finalTotalBytes = options.finalBlob.size;
 			this.totalRecordedBytes = options.finalBlob.size;
 		}
