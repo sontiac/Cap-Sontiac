@@ -74,12 +74,20 @@ const verifyGoogleDriveState = (state: string) => {
 	return User.UserId.make(parsed.userId);
 };
 
+const escapeHtml = (value: string) =>
+	value
+		.replace(/&/g, "&amp;")
+		.replace(/</g, "&lt;")
+		.replace(/>/g, "&gt;")
+		.replace(/"/g, "&quot;")
+		.replace(/'/g, "&#39;");
+
 const htmlResponse = (title: string, body: string) => `<!doctype html>
 <html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>${title}</title>
+<title>${escapeHtml(title)}</title>
 <style>
 body{font-family:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;margin:0;min-height:100vh;display:grid;place-items:center;background:#f6f5f3;color:#1f1f1f}
 main{max-width:480px;padding:32px;text-align:center}
@@ -89,8 +97,8 @@ p{font-size:15px;line-height:1.5;color:#555;margin:0}
 </head>
 <body>
 <main>
-<h1>${title}</h1>
-<p>${body}</p>
+<h1>${escapeHtml(title)}</h1>
+<p>${escapeHtml(body)}</p>
 </main>
 </body>
 </html>`;
