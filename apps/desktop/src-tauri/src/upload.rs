@@ -61,7 +61,17 @@ const CONNECTIVITY_PROBE_INITIAL_DELAY: Duration = Duration::from_secs(2);
 const CONNECTIVITY_PROBE_MAX_DELAY: Duration = Duration::from_secs(30);
 
 fn is_google_drive_resumable_url(url: &str) -> bool {
-    url.contains("googleapis.com/upload/drive/")
+    let Ok(url) = reqwest::Url::parse(url) else {
+        return false;
+    };
+    url.host_str().is_some_and(|host| {
+        (host == "googleapis.com" || host.ends_with(".googleapis.com"))
+            && url.path().starts_with("/upload/drive/")
+    })
+}
+
+fn is_google_drive_upload(provider: Option<&str>, upload_id: &str) -> bool {
+    provider == Some("googleDrive") || is_google_drive_resumable_url(upload_id)
 }
 
 fn with_drive_content_range(
@@ -75,7 +85,7 @@ fn with_drive_content_range(
         return request;
     }
 
-    let end = offset + size - 1;
+    let end = offset.saturating_add(size).saturating_sub(1);
     request.header(
         "Content-Range",
         format!("bytes {offset}-{end}/{total_size}"),
@@ -107,7 +117,9 @@ pub async fn upload_video(
     info!("Uploading video {video_id}...");
 
     let start = Instant::now();
-    let upload_id = api::upload_multipart_initiate(app, &video_id).await?;
+    let upload = api::upload_multipart_initiate(app, &video_id).await?;
+    let is_drive_upload = is_google_drive_upload(upload.provider.as_deref(), &upload.upload_id);
+    let upload_id = upload.upload_id;
 
     let video_fut = async {
         let failed_chunks: Arc<Mutex<Vec<FailedChunkInfo>>> = Arc::new(Mutex::new(Vec::new()));
@@ -119,6 +131,7 @@ pub async fn upload_video(
                 app.clone(),
                 video_id.clone(),
                 upload_id.clone(),
+                is_drive_upload,
                 from_pending_file_to_chunks(file_path.clone(), None),
                 failed_chunks.clone(),
             ),
@@ -515,7 +528,9 @@ impl InstantMultipartUpload {
             .map_err(|e| error!("Failed to save recording meta: {e}"))
             .ok();
 
-        let upload_id = api::upload_multipart_initiate(&app, &video_id).await?;
+        let upload = api::upload_multipart_initiate(&app, &video_id).await?;
+        let is_drive_upload = is_google_drive_upload(upload.provider.as_deref(), &upload.upload_id);
+        let upload_id = upload.upload_id;
 
         let failed_chunks: Arc<Mutex<Vec<FailedChunkInfo>>> = Arc::new(Mutex::new(Vec::new()));
 
@@ -526,6 +541,7 @@ impl InstantMultipartUpload {
                 app.clone(),
                 video_id.clone(),
                 upload_id.clone(),
+                is_drive_upload,
                 from_pending_file_to_chunks(file_path.clone(), realtime_video_done),
                 failed_chunks.clone(),
             ),
@@ -1691,6 +1707,7 @@ fn multipart_uploader(
     app: AppHandle,
     video_id: String,
     upload_id: String,
+    is_drive_upload: bool,
     stream: impl Stream<Item = io::Result<Chunk>> + Send + 'static,
     failed_chunks: Arc<Mutex<Vec<FailedChunkInfo>>>,
 ) -> impl Stream<Item = Result<UploadedPart, AuthedApiError>> + 'static {
@@ -1702,7 +1719,7 @@ fn multipart_uploader(
 
     stream::once(async move {
         let use_md5_hashes = app.is_server_url_custom().await;
-        let max_concurrent_uploads = if is_google_drive_resumable_url(&upload_id) {
+        let max_concurrent_uploads = if is_drive_upload {
             1
         } else {
             MAX_CONCURRENT_UPLOADS
