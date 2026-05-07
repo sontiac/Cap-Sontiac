@@ -668,11 +668,14 @@ export class InstantRecordingUploader {
 			xhr.open("PUT", url);
 			xhr.responseType = "text";
 			xhr.timeout = PART_UPLOAD_REQUEST_TIMEOUT_MS;
+			let isFinalDrivePart = false;
 			if (provider === "googleDrive") {
 				const start = this.partOffsets.get(partNumber) ?? 0;
 				const end = start + part.size - 1;
+				isFinalDrivePart =
+					this.finalTotalBytes !== null && end + 1 >= this.finalTotalBytes;
 				const total =
-					this.finalTotalBytes !== null && end + 1 >= this.finalTotalBytes
+					isFinalDrivePart && this.finalTotalBytes !== null
 						? this.finalTotalBytes.toString()
 						: "*";
 				xhr.setRequestHeader("Content-Range", `bytes ${start}-${end}/${total}`);
@@ -729,7 +732,9 @@ export class InstantRecordingUploader {
 				clearRequest();
 				if (
 					(xhr.status >= 200 && xhr.status < 300) ||
-					(provider === "googleDrive" && xhr.status === 308)
+					(provider === "googleDrive" &&
+						xhr.status === 308 &&
+						!isFinalDrivePart)
 				) {
 					const etagHeader = xhr.getResponseHeader("ETag");
 					const etag =
