@@ -33,6 +33,11 @@ export type GoogleDriveStorageQuotaCache = GoogleDriveStorageQuota & {
 	fetchedAt: string;
 };
 
+export type GoogleDriveAccessTokenCache = {
+	accessToken: string;
+	expiresAt: Date;
+};
+
 export type StorageObjectInput = {
 	integrationId: Storage.StorageIntegrationId;
 	ownerId: User.UserId;
@@ -46,9 +51,46 @@ export type StorageObjectInput = {
 	metadata?: Storage.StorageObjectMetadata | null;
 };
 
+const getAffectedRows = (result: unknown) => {
+	if (Array.isArray(result)) {
+		return (
+			(result[0] as { affectedRows?: number } | undefined)?.affectedRows ?? 0
+		);
+	}
+
+	return (result as { affectedRows?: number } | undefined)?.affectedRows ?? 0;
+};
+
 export class StorageRepo extends Effect.Service<StorageRepo>()("StorageRepo", {
 	effect: Effect.gen(function* () {
 		const db = yield* Database;
+
+		const decodeGoogleDriveAccessTokenCache = Effect.fn(
+			"StorageRepo.decodeGoogleDriveAccessTokenCache",
+		)(
+			(input: {
+				googleDriveAccessToken: string | null;
+				googleDriveAccessTokenExpiresAt: Date | null;
+			}) =>
+				Effect.gen(function* () {
+					if (
+						!input.googleDriveAccessToken ||
+						!input.googleDriveAccessTokenExpiresAt
+					) {
+						return Option.none<GoogleDriveAccessTokenCache>();
+					}
+
+					const accessToken = yield* Effect.tryPromise({
+						try: () => decrypt(input.googleDriveAccessToken as string),
+						catch: (cause) => new Storage.StorageError({ cause }),
+					});
+
+					return Option.some({
+						accessToken,
+						expiresAt: input.googleDriveAccessTokenExpiresAt,
+					});
+				}),
+		);
 
 		const getActiveIntegrationForUser = Effect.fn(
 			"StorageRepo.getActiveIntegrationForUser",
@@ -94,6 +136,139 @@ export class StorageRepo extends Effect.Service<StorageRepo>()("StorageRepo", {
 						) as GoogleDriveIntegrationConfig,
 					catch: (cause) => new Storage.StorageError({ cause }),
 				}),
+		);
+
+		const getGoogleDriveAccessTokenCache = Effect.fn(
+			"StorageRepo.getGoogleDriveAccessTokenCache",
+		)((integration: typeof Db.storageIntegrations.$inferSelect) =>
+			decodeGoogleDriveAccessTokenCache({
+				googleDriveAccessToken: integration.googleDriveAccessToken,
+				googleDriveAccessTokenExpiresAt:
+					integration.googleDriveAccessTokenExpiresAt,
+			}),
+		);
+
+		const getGoogleDriveAccessTokenCacheById = Effect.fn(
+			"StorageRepo.getGoogleDriveAccessTokenCacheById",
+		)((id: Storage.StorageIntegrationId) =>
+			Effect.gen(function* () {
+				const [integration] = yield* db.use((db) =>
+					db
+						.select({
+							googleDriveAccessToken:
+								Db.storageIntegrations.googleDriveAccessToken,
+							googleDriveAccessTokenExpiresAt:
+								Db.storageIntegrations.googleDriveAccessTokenExpiresAt,
+						})
+						.from(Db.storageIntegrations)
+						.where(Dz.eq(Db.storageIntegrations.id, id))
+						.limit(1),
+				);
+
+				if (!integration) return Option.none<GoogleDriveAccessTokenCache>();
+				return yield* decodeGoogleDriveAccessTokenCache(integration);
+			}),
+		);
+
+		const claimGoogleDriveTokenRefreshLease = Effect.fn(
+			"StorageRepo.claimGoogleDriveTokenRefreshLease",
+		)(
+			(
+				id: Storage.StorageIntegrationId,
+				leaseId: string,
+				leaseExpiresAt: Date,
+			) =>
+				Effect.gen(function* () {
+					const result = yield* db.use((db) =>
+						db
+							.update(Db.storageIntegrations)
+							.set({
+								googleDriveTokenRefreshLeaseId: leaseId,
+								googleDriveTokenRefreshLeaseExpiresAt: leaseExpiresAt,
+								updatedAt: new Date(),
+							})
+							.where(
+								Dz.and(
+									Dz.eq(Db.storageIntegrations.id, id),
+									Dz.or(
+										Dz.isNull(
+											Db.storageIntegrations
+												.googleDriveTokenRefreshLeaseExpiresAt,
+										),
+										Dz.lt(
+											Db.storageIntegrations
+												.googleDriveTokenRefreshLeaseExpiresAt,
+											new Date(),
+										),
+									),
+								),
+							),
+					);
+
+					return getAffectedRows(result) > 0;
+				}),
+		);
+
+		const saveGoogleDriveAccessTokenCache = Effect.fn(
+			"StorageRepo.saveGoogleDriveAccessTokenCache",
+		)(
+			(
+				id: Storage.StorageIntegrationId,
+				leaseId: string,
+				cache: GoogleDriveAccessTokenCache,
+			) =>
+				Effect.gen(function* () {
+					const googleDriveAccessToken = yield* Effect.tryPromise({
+						try: () => encrypt(cache.accessToken),
+						catch: (cause) => new Storage.StorageError({ cause }),
+					});
+
+					const result = yield* db.use((db) =>
+						db
+							.update(Db.storageIntegrations)
+							.set({
+								googleDriveAccessToken,
+								googleDriveAccessTokenExpiresAt: cache.expiresAt,
+								googleDriveTokenRefreshLeaseId: null,
+								googleDriveTokenRefreshLeaseExpiresAt: null,
+								updatedAt: new Date(),
+							})
+							.where(
+								Dz.and(
+									Dz.eq(Db.storageIntegrations.id, id),
+									Dz.eq(
+										Db.storageIntegrations.googleDriveTokenRefreshLeaseId,
+										leaseId,
+									),
+								),
+							),
+					);
+
+					return getAffectedRows(result) > 0;
+				}),
+		);
+
+		const releaseGoogleDriveTokenRefreshLease = Effect.fn(
+			"StorageRepo.releaseGoogleDriveTokenRefreshLease",
+		)((id: Storage.StorageIntegrationId, leaseId: string) =>
+			db.use((db) =>
+				db
+					.update(Db.storageIntegrations)
+					.set({
+						googleDriveTokenRefreshLeaseId: null,
+						googleDriveTokenRefreshLeaseExpiresAt: null,
+						updatedAt: new Date(),
+					})
+					.where(
+						Dz.and(
+							Dz.eq(Db.storageIntegrations.id, id),
+							Dz.eq(
+								Db.storageIntegrations.googleDriveTokenRefreshLeaseId,
+								leaseId,
+							),
+						),
+					),
+			),
 		);
 
 		const upsertObject = Effect.fn("StorageRepo.upsertObject")(
@@ -288,6 +463,11 @@ export class StorageRepo extends Effect.Service<StorageRepo>()("StorageRepo", {
 			getActiveIntegrationForUser,
 			getIntegrationById,
 			getGoogleDriveConfig,
+			getGoogleDriveAccessTokenCache,
+			getGoogleDriveAccessTokenCacheById,
+			claimGoogleDriveTokenRefreshLease,
+			saveGoogleDriveAccessTokenCache,
+			releaseGoogleDriveTokenRefreshLease,
 			upsertObject,
 			reserveObject,
 			getObjectByKey,
