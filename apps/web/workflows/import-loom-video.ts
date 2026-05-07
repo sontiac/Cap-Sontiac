@@ -19,6 +19,20 @@ interface ImportLoomPayload {
 }
 
 const MINIMUM_VIDEO_SIZE = 1024;
+const MEDIA_SERVER_START_MAX_ATTEMPTS = 6;
+const MEDIA_SERVER_START_RETRY_BASE_MS = 2000;
+const MEDIA_SERVER_COMPLETION_MAX_ATTEMPTS = 720;
+const MEDIA_SERVER_COMPLETION_POLL_INTERVAL_MS = 5000;
+const MEDIA_SERVER_PRESIGNED_GET_EXPIRES_SECONDS = 3 * 60 * 60;
+const MEDIA_SERVER_PRESIGNED_PUT_EXPIRES_SECONDS = 3 * 60 * 60;
+
+function isPositiveNumber(value: number | null): value is number {
+	return typeof value === "number" && Number.isFinite(value) && value > 0;
+}
+
+function getValidDuration(duration: number) {
+	return Number.isFinite(duration) && duration > 0 ? duration : undefined;
+}
 
 function isStreamingUrl(url: string): boolean {
 	const path = (url.split("?")[0] ?? "").toLowerCase();
@@ -227,9 +241,13 @@ async function downloadLoomToS3(
 			metadata: video.metadata,
 		});
 		const [bucket] = yield* Storage.getAccessForVideo(videoDomain);
-		return yield* bucket.getInternalPresignedPutUrl(rawFileKey, {
-			ContentType: "video/mp4",
-		});
+		return yield* bucket.getInternalPresignedPutUrl(
+			rawFileKey,
+			{
+				ContentType: "video/mp4",
+			},
+			{ expiresIn: MEDIA_SERVER_PRESIGNED_PUT_EXPIRES_SECONDS },
+		);
 	}).pipe(runPromise);
 
 	const videoBuffer = await downloadVideoContent(freshDownloadUrl);
@@ -282,9 +300,6 @@ interface MediaServerProcessResult {
 		fps: number;
 	};
 }
-
-const MEDIA_SERVER_START_MAX_ATTEMPTS = 6;
-const MEDIA_SERVER_START_RETRY_BASE_MS = 2000;
 
 async function waitForRetry(delayMs: number): Promise<void> {
 	await new Promise((resolve) => setTimeout(resolve, delayMs));
@@ -387,11 +402,14 @@ async function processVideoOnMediaServer(
 			const outputKey = `${userId}/${videoId}/result.mp4`;
 			const thumbnailKey = `${userId}/${videoId}/screenshot/screen-capture.jpg`;
 
-			const rawVideoUrl = yield* bucket.getInternalSignedObjectUrl(rawFileKey);
+			const rawVideoUrl = yield* bucket.getInternalSignedObjectUrl(rawFileKey, {
+				expiresIn: MEDIA_SERVER_PRESIGNED_GET_EXPIRES_SECONDS,
+			});
 
 			const outputPresignedUrl = yield* bucket.getInternalPresignedPutUrl(
 				outputKey,
 				{ ContentType: "video/mp4" },
+				{ expiresIn: MEDIA_SERVER_PRESIGNED_PUT_EXPIRES_SECONDS },
 			);
 
 			const thumbnailPresignedUrl = yield* bucket.getInternalPresignedPutUrl(
@@ -399,6 +417,7 @@ async function processVideoOnMediaServer(
 				{
 					ContentType: "image/jpeg",
 				},
+				{ expiresIn: MEDIA_SERVER_PRESIGNED_PUT_EXPIRES_SECONDS },
 			);
 
 			return { rawVideoUrl, outputPresignedUrl, thumbnailPresignedUrl };
@@ -408,7 +427,7 @@ async function processVideoOnMediaServer(
 	const webhookSecret = serverEnv().MEDIA_SERVER_WEBHOOK_SECRET;
 	const sourceVideoUrl = processingInput.sourceVideoUrl ?? rawVideoUrl;
 
-	const jobId = await startMediaServerProcessJob(mediaServerUrl, {
+	await startMediaServerProcessJob(mediaServerUrl, {
 		videoId,
 		userId,
 		videoUrl: sourceVideoUrl,
@@ -419,58 +438,103 @@ async function processVideoOnMediaServer(
 		inputExtension: processingInput.inputExtension,
 	});
 
-	return await pollForCompletion(mediaServerUrl, jobId);
+	return await waitForProcessingCompletion(videoId);
 }
 
-async function pollForCompletion(
-	mediaServerUrl: string,
-	jobId: string,
-): Promise<MediaServerProcessResult> {
-	const maxAttempts = 360;
-	const pollIntervalMs = 5000;
-
-	for (let attempt = 0; attempt < maxAttempts; attempt++) {
-		await new Promise((resolve) => setTimeout(resolve, pollIntervalMs));
-
-		const response = await fetch(
-			`${mediaServerUrl}/video/process/${jobId}/status`,
-			{
-				method: "GET",
-				headers: { Accept: "application/json" },
-			},
-		);
-
-		if (!response.ok) continue;
-
-		const status = (await response.json()) as {
-			phase: string;
-			progress: number;
-			error?: string;
-			metadata?: {
-				duration: number;
-				width: number;
-				height: number;
-				fps: number;
-			};
-		};
-
-		if (status.phase === "complete") {
-			if (!status.metadata) {
-				throw new Error("Processing completed but no metadata returned");
-			}
-			return { metadata: status.metadata };
-		}
-
-		if (status.phase === "error") {
-			throw new Error(status.error || "Video processing failed");
-		}
-
-		if (status.phase === "cancelled") {
-			throw new Error("Video processing was cancelled");
-		}
+function getMetadataFromVideoRow(
+	video:
+		| {
+				duration: number | null;
+				width: number | null;
+				height: number | null;
+				fps: number | null;
+		  }
+		| undefined,
+): MediaServerProcessResult["metadata"] | null {
+	if (
+		!video ||
+		!isPositiveNumber(video.width) ||
+		!isPositiveNumber(video.height) ||
+		!isPositiveNumber(video.fps)
+	) {
+		return null;
 	}
 
-	throw new Error("Video processing timed out");
+	return {
+		duration: isPositiveNumber(video.duration) ? video.duration : 0,
+		width: video.width,
+		height: video.height,
+		fps: video.fps,
+	};
+}
+
+async function getCompletedMetadata(
+	videoId: string,
+): Promise<MediaServerProcessResult["metadata"] | null> {
+	const [video] = await db()
+		.select({
+			duration: videos.duration,
+			width: videos.width,
+			height: videos.height,
+			fps: videos.fps,
+		})
+		.from(videos)
+		.where(eq(videos.id, videoId as Video.VideoId));
+
+	return getMetadataFromVideoRow(video);
+}
+
+async function waitForProcessingCompletion(
+	videoId: string,
+): Promise<MediaServerProcessResult> {
+	let lastStatus = "processing";
+
+	for (
+		let attempt = 0;
+		attempt < MEDIA_SERVER_COMPLETION_MAX_ATTEMPTS;
+		attempt++
+	) {
+		await waitForRetry(MEDIA_SERVER_COMPLETION_POLL_INTERVAL_MS);
+
+		const [upload] = await db()
+			.select({
+				phase: videoUploads.phase,
+				processingProgress: videoUploads.processingProgress,
+				processingMessage: videoUploads.processingMessage,
+				processingError: videoUploads.processingError,
+			})
+			.from(videoUploads)
+			.where(eq(videoUploads.videoId, videoId as Video.VideoId));
+
+		if (!upload || upload.phase === "complete") {
+			const metadata = await getCompletedMetadata(videoId);
+			if (!metadata) {
+				throw new Error("Processing completed but video metadata is missing");
+			}
+
+			return { metadata };
+		}
+
+		if (upload.phase === "error") {
+			throw new Error(
+				upload.processingError ||
+					upload.processingMessage ||
+					"Loom import failed",
+			);
+		}
+
+		lastStatus = [
+			upload.phase,
+			typeof upload.processingProgress === "number"
+				? `${upload.processingProgress}%`
+				: null,
+			upload.processingMessage,
+		]
+			.filter(Boolean)
+			.join(" ");
+	}
+
+	throw new Error(`Video processing timed out while ${lastStatus}`);
 }
 
 async function saveMetadataAndComplete(
@@ -484,7 +548,10 @@ async function saveMetadataAndComplete(
 		.set({
 			width: metadata.width,
 			height: metadata.height,
-			duration: metadata.duration,
+			fps: metadata.fps,
+			...(getValidDuration(metadata.duration) === undefined
+				? {}
+				: { duration: metadata.duration }),
 		})
 		.where(eq(videos.id, videoId as Video.VideoId));
 
