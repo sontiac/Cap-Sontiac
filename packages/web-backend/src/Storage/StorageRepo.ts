@@ -19,7 +19,6 @@ export type GoogleDriveIntegrationConfig = {
 	folderId: string;
 	email?: string;
 	scope?: string;
-	storageQuotaCache?: GoogleDriveStorageQuotaCache;
 };
 
 export type GoogleDriveStorageQuota = {
