@@ -14,7 +14,9 @@ import {
 	copyGoogleDriveFile,
 	createGoogleDriveResumableUpload,
 	deleteGoogleDriveFile,
+	findGoogleDriveFileByObjectKey,
 	GOOGLE_DRIVE_FOLDER_MIME_TYPE,
+	type GoogleDriveFile,
 	type GoogleDriveTokenStore,
 	getGoogleDriveFileMetadata,
 	getGoogleDriveObjectResponse,
@@ -277,6 +279,18 @@ const makeS3Access = (s3: S3BucketAccess) => ({
 		}),
 });
 
+const parseGoogleDriveContentLength = (file: GoogleDriveFile) => {
+	if (!file.size) return null;
+	const contentLength = Number(file.size);
+	return Number.isFinite(contentLength) ? contentLength : null;
+};
+
+const parseObjectKeyVideoId = (key: string) =>
+	parseVideoIdFromObjectKey(key).pipe(
+		Option.map((id) => id as Video.VideoId),
+		Option.getOrNull,
+	);
+
 const makeGoogleDriveAccess = ({
 	repo,
 	integration,
@@ -292,6 +306,57 @@ const makeGoogleDriveAccess = ({
 
 	const getObjectRecord = (key: string) =>
 		mapStorageError(requireDriveObject(repo, integrationId, key));
+	const recoverDriveFileId = (
+		key: string,
+		previous: typeof Db.storageObjects.$inferSelect,
+	) =>
+		findGoogleDriveFileByObjectKey(config, key, tokenStore).pipe(
+			Effect.flatMap(
+				Option.match({
+					onNone: () =>
+						Effect.fail(
+							new StorageDomain.StorageError({
+								cause: new Error(`Google Drive object not found: ${key}`),
+							}),
+						),
+					onSome: (file) => {
+						const videoId = parseObjectKeyVideoId(key);
+						const contentType = file.mimeType ?? previous.contentType;
+						return mapStorageError(
+							repo.upsertObject({
+								integrationId,
+								ownerId,
+								videoId,
+								objectKey: key,
+								providerObjectId: file.id,
+								uploadStatus: "complete",
+								contentType,
+								contentLength:
+									parseGoogleDriveContentLength(file) ??
+									previous.contentLength ??
+									null,
+								metadata: {
+									...(previous.metadata ?? {}),
+									videoId: videoId ?? previous.metadata?.videoId,
+									fileName: file.name ?? previous.metadata?.fileName,
+									contentType: file.mimeType ?? previous.metadata?.contentType,
+								},
+							}),
+						).pipe(Effect.as(file.id));
+					},
+				}),
+			),
+		);
+	const withRecoveredDriveFile = <A>(
+		key: string,
+		object: typeof Db.storageObjects.$inferSelect,
+		read: (fileId: string) => Effect.Effect<A, StorageDomain.StorageError>,
+	) =>
+		read(object.providerObjectId).pipe(
+			Effect.catchTag("StorageError", () =>
+				recoverDriveFileId(key, object).pipe(Effect.flatMap(read)),
+			),
+		);
 
 	return {
 		provider: "googleDrive" as const,
@@ -303,7 +368,9 @@ const makeGoogleDriveAccess = ({
 		getObject: (key: string) =>
 			getObjectRecord(key).pipe(
 				Effect.flatMap((object) =>
-					getGoogleDriveObjectText(config, object.providerObjectId, tokenStore),
+					withRecoveredDriveFile(key, object, (fileId) =>
+						getGoogleDriveObjectText(config, fileId, tokenStore),
+					),
 				),
 				Effect.map(Option.some),
 				Effect.catchTag("StorageError", () => Effect.succeed(Option.none())),
@@ -341,10 +408,8 @@ const makeGoogleDriveAccess = ({
 		headObject: (key: string) =>
 			getObjectRecord(key).pipe(
 				Effect.flatMap((object) =>
-					getGoogleDriveFileMetadata(
-						config,
-						object.providerObjectId,
-						tokenStore,
+					withRecoveredDriveFile(key, object, (fileId) =>
+						getGoogleDriveFileMetadata(config, fileId, tokenStore),
 					).pipe(
 						Effect.map((metadata) => ({
 							ContentLength: metadata.size
@@ -621,11 +686,8 @@ const makeGoogleDriveAccess = ({
 		getObjectResponse: (key: string, range?: string | null) =>
 			getObjectRecord(key).pipe(
 				Effect.flatMap((object) =>
-					getGoogleDriveObjectResponse(
-						config,
-						object.providerObjectId,
-						range,
-						tokenStore,
+					withRecoveredDriveFile(key, object, (fileId) =>
+						getGoogleDriveObjectResponse(config, fileId, range, tokenStore),
 					),
 				),
 			),
