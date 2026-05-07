@@ -20,11 +20,12 @@ const DRIVE_WARNING_FILE_NAME = "DO_NOT_EDIT_OR_DELETE.txt";
 const DRIVE_WARNING_TEXT =
 	"Cap uses this folder to store and serve your video files. Do not rename, move, edit, or delete files or folders here. Changing anything in this folder can break playback, downloads, thumbnails, captions, and processing.";
 
-type GoogleDriveFile = {
+export type GoogleDriveFile = {
 	id: string;
 	name?: string;
 	mimeType?: string;
 	size?: string;
+	modifiedTime?: string;
 };
 
 type GoogleDriveListResponse = {
@@ -937,6 +938,44 @@ export const getGoogleDriveFileMetadata = (
 			}),
 		),
 	);
+
+export const findGoogleDriveFileByObjectKey = (
+	config: GoogleDriveIntegrationConfig,
+	key: string,
+	tokenStore?: GoogleDriveTokenStore,
+) => {
+	const query = [
+		`appProperties has { key='capObjectKey' and value='${escapeDriveQueryValue(key)}' }`,
+		"trashed=false",
+	].join(" and ");
+	const params = new URLSearchParams({
+		q: query,
+		fields: "files(id,name,mimeType,size,modifiedTime)",
+		orderBy: "modifiedTime desc",
+		pageSize: "10",
+		spaces: "drive",
+	});
+
+	return driveFetch(
+		config,
+		`${DRIVE_API_BASE}/files?${params.toString()}`,
+		undefined,
+		tokenStore,
+	).pipe(
+		Effect.flatMap((response) =>
+			Effect.tryPromise({
+				try: () => parseDriveJson<GoogleDriveListResponse>(response),
+				catch: (cause) => new Storage.StorageError({ cause }),
+			}),
+		),
+		Effect.map((body) => {
+			const files = body.files ?? [];
+			return Option.fromNullable(
+				files.find((file) => Number(file.size ?? 0) > 0) ?? files[0],
+			);
+		}),
+	);
+};
 
 export const getGoogleDriveObjectText = (
 	config: GoogleDriveIntegrationConfig,
