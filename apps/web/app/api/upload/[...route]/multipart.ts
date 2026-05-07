@@ -373,6 +373,9 @@ app.post(
 						MultipartUpload: {
 							Parts: formattedParts,
 						},
+						...(bucket.provider === "googleDrive"
+							? { MpuObjectSize: totalSize }
+							: {}),
 					});
 					yield* Effect.promise(() =>
 						invalidateGoogleDriveStorageQuotaCache(

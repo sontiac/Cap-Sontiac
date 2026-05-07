@@ -626,26 +626,15 @@ const makeGoogleDriveAccess = ({
 			complete: (
 				key: string,
 				_uploadId?: string,
-				_args?: Omit<
+				args?: Omit<
 					S3.CompleteMultipartUploadCommandInput,
 					"Key" | "Bucket" | "UploadId"
 				>,
 			) =>
 				getObjectRecord(key).pipe(
-					Effect.flatMap((object) =>
-						getGoogleDriveFileMetadata(
-							config,
-							object.providerObjectId,
-							tokenStore,
-						),
-					),
-					Effect.flatMap((metadata) =>
+					Effect.flatMap(() =>
 						mapStorageError(
-							repo.markObjectComplete(
-								integrationId,
-								key,
-								metadata.size ? Number(metadata.size) : undefined,
-							),
+							repo.markObjectComplete(integrationId, key, args?.MpuObjectSize),
 						),
 					),
 					Effect.flatMap(() => createDriveObjectUrl(key)),
