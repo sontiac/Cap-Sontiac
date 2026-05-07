@@ -64,7 +64,7 @@ app.post(
 			if (video.ownerId !== user.id) return c.json({ error: "Forbidden" }, 403);
 			const videoDomain = decodeVideo(video);
 
-			const urls = await Effect.gen(function* () {
+			const batch = await Effect.gen(function* () {
 				const [bucket] = yield* Storage.getAccessForVideo(videoDomain);
 
 				const entries = yield* Effect.all(
@@ -75,17 +75,19 @@ app.post(
 								contentType: contentTypeForSubpath(subpath),
 								method: "put",
 							})
-							.pipe(Effect.map((url) => [subpath, url] as const));
+							.pipe(Effect.map((upload) => [subpath, upload] as const));
 					}),
 					{ concurrency: "unbounded" },
 				);
 
-				return Object.fromEntries(
+				const uploads = Object.fromEntries(entries);
+				const urls = Object.fromEntries(
 					entries.map(([subpath, upload]) => [subpath, upload.url]),
 				);
+				return { uploads, urls };
 			}).pipe(runPromise);
 
-			return c.json({ urls });
+			return c.json(batch);
 		} catch (error) {
 			console.error("Batch signed URL generation failed:", error);
 			return c.json({ error: "Internal server error" }, 500);
