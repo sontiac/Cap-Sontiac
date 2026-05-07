@@ -403,13 +403,13 @@ app.post(
 								`Object verification successful: ContentType=${headResult.ContentType}, ContentLength=${headResult.ContentLength}`,
 							),
 						),
-						Effect.catchAll((headError) =>
-							Effect.logError(`Warning: Unable to verify object: ${headError}`),
-						),
 						Effect.retry({
 							times: 3,
 							schedule: Schedule.exponential("50 millis"),
 						}),
+						Effect.catchAll((headError) =>
+							Effect.logError(`Warning: Unable to verify object: ${headError}`),
+						),
 					);
 
 					if (isRawRecorderUpload(subpath)) {
