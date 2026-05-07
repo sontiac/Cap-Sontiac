@@ -257,6 +257,7 @@ protectedApp.delete("/google-drive/disconnect", async (c) => {
 			googleDriveAccessTokenExpiresAt: null,
 			googleDriveTokenRefreshLeaseId: null,
 			googleDriveTokenRefreshLeaseExpiresAt: null,
+			googleDriveStorageQuotaCache: null,
 		})
 		.where(
 			and(
@@ -374,6 +375,7 @@ app.get("/google-drive/callback", async (c) => {
 						googleDriveAccessTokenExpiresAt: null,
 						googleDriveTokenRefreshLeaseId: null,
 						googleDriveTokenRefreshLeaseExpiresAt: null,
+						googleDriveStorageQuotaCache: null,
 					})
 					.where(eq(storageIntegrations.id, reusable.id));
 				return;
