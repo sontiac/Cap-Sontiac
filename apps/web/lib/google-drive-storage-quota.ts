@@ -1,5 +1,5 @@
 import { db } from "@cap/database";
-import { decrypt, encrypt } from "@cap/database/crypto";
+import { decrypt } from "@cap/database/crypto";
 import { storageIntegrations } from "@cap/database/schema";
 import {
 	type GoogleDriveIntegrationConfig,
@@ -8,7 +8,7 @@ import {
 	getGoogleDriveStorageQuota,
 } from "@cap/web-backend";
 import { Storage } from "@cap/web-domain";
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { runPromise } from "@/lib/server";
 
 const googleDriveProvider = "googleDrive";
@@ -79,14 +79,22 @@ const isFresh = (quota: GoogleDriveStorageQuotaCache, ttlMs: number) => {
 	return Number.isFinite(fetchedAt) && Date.now() - fetchedAt < ttlMs;
 };
 
-const saveConfig = async (
+const saveQuotaCache = async (
 	integrationId: Storage.StorageIntegrationId,
-	config: GoogleDriveIntegrationConfig,
+	encryptedConfig: string,
+	storageQuotaCache: GoogleDriveStorageQuotaCache,
 ) => {
 	await db()
 		.update(storageIntegrations)
-		.set({ encryptedConfig: await encrypt(JSON.stringify(config)) })
-		.where(eq(storageIntegrations.id, integrationId));
+		.set({ googleDriveStorageQuotaCache: storageQuotaCache })
+		.where(
+			and(
+				eq(storageIntegrations.id, integrationId),
+				eq(storageIntegrations.provider, googleDriveProvider),
+				eq(storageIntegrations.status, "active"),
+				eq(storageIntegrations.encryptedConfig, encryptedConfig),
+			),
+		);
 };
 
 export const getCachedGoogleDriveStorageQuota = async (
@@ -101,7 +109,7 @@ export const getCachedGoogleDriveStorageQuota = async (
 	}
 
 	const config = await parseConfig(integration.encryptedConfig);
-	const cached = config.storageQuotaCache;
+	const cached = integration.googleDriveStorageQuotaCache;
 	const ttlMs = options?.forceRefresh
 		? storageQuotaRefreshFloorMs
 		: storageQuotaCacheTtlMs;
@@ -111,7 +119,11 @@ export const getCachedGoogleDriveStorageQuota = async (
 	try {
 		const quota = await getGoogleDriveStorageQuota(config).pipe(runPromise);
 		const storageQuotaCache = toCache(quota);
-		await saveConfig(integration.id, { ...config, storageQuotaCache });
+		await saveQuotaCache(
+			integration.id,
+			integration.encryptedConfig,
+			storageQuotaCache,
+		);
 		return toSnapshot(storageQuotaCache, false);
 	} catch (error) {
 		console.error("Failed to refresh Google Drive storage quota:", error);
@@ -126,21 +138,15 @@ export const invalidateGoogleDriveStorageQuotaCache = async (
 	const storageIntegrationId = Storage.StorageIntegrationId.make(integrationId);
 
 	try {
-		const [integration] = await db()
-			.select()
-			.from(storageIntegrations)
-			.where(eq(storageIntegrations.id, storageIntegrationId))
-			.limit(1);
-
-		if (!integration || integration.provider !== googleDriveProvider) return;
-
-		const config = await parseConfig(integration.encryptedConfig);
-		if (!config.storageQuotaCache) return;
-
-		const nextConfig = { ...config };
-		delete nextConfig.storageQuotaCache;
-
-		await saveConfig(integration.id, nextConfig);
+		await db()
+			.update(storageIntegrations)
+			.set({ googleDriveStorageQuotaCache: null })
+			.where(
+				and(
+					eq(storageIntegrations.id, storageIntegrationId),
+					eq(storageIntegrations.provider, googleDriveProvider),
+				),
+			);
 	} catch (error) {
 		console.error("Failed to invalidate Google Drive storage quota:", error);
 	}
