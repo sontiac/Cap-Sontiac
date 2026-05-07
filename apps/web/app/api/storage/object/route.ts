@@ -54,6 +54,9 @@ const isStorageError = (error: unknown) =>
 	error instanceof StorageDomain.StorageError ||
 	getErrorTag(error) === "StorageError";
 
+const isPolicyDeniedError = (error: unknown) =>
+	getErrorTag(error) === "PolicyDenied";
+
 const isObjectNotFoundError = (error: unknown) => {
 	if (error === "not-found") return true;
 	if (!isStorageError(error)) return false;
@@ -66,13 +69,13 @@ const isObjectNotFoundError = (error: unknown) => {
 };
 
 const toProxyErrorResponse = (error: unknown) => {
-	if (isObjectNotFoundError(error)) {
+	if (isObjectNotFoundError(error) || isPolicyDeniedError(error)) {
 		return new Response("Not found", { status: 404 });
 	}
 	if (isStorageError(error)) {
 		return new Response("Storage upstream error", { status: 502 });
 	}
-	return new Response("Not found", { status: 404 });
+	return new Response("Internal server error", { status: 500 });
 };
 
 const getTokenVideo = (videoId: Video.VideoId) =>
@@ -137,7 +140,10 @@ export async function GET(request: NextRequest) {
 			status: upstream.status,
 			headers,
 		});
-	}).pipe(provideOptionalAuth);
+	}).pipe(
+		provideOptionalAuth,
+		Effect.catchAll((error) => Effect.succeed(toProxyErrorResponse(error))),
+	);
 
 	try {
 		return await runPromise(effect);
