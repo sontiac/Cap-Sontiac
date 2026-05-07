@@ -156,10 +156,14 @@ const makeS3Access = (s3: S3BucketAccess) => ({
 	provider: "s3" as const,
 	bucketName: s3.bucketName,
 	isPathStyle: s3.isPathStyle,
-	getSignedObjectUrl: (key: string) =>
-		mapStorageError(s3.getSignedObjectUrl(key)),
-	getInternalSignedObjectUrl: (key: string) =>
-		mapStorageError(s3.getInternalSignedObjectUrl(key)),
+	getSignedObjectUrl: (
+		key: string,
+		signingArgs?: Parameters<S3BucketAccess["getSignedObjectUrl"]>[1],
+	) => mapStorageError(s3.getSignedObjectUrl(key, signingArgs)),
+	getInternalSignedObjectUrl: (
+		key: string,
+		signingArgs?: Parameters<S3BucketAccess["getInternalSignedObjectUrl"]>[1],
+	) => mapStorageError(s3.getInternalSignedObjectUrl(key, signingArgs)),
 	getObject: (key: string) => mapStorageError(s3.getObject(key)),
 	listObjects: (input: {
 		prefix?: string;
@@ -362,9 +366,14 @@ const makeGoogleDriveAccess = ({
 		provider: "googleDrive" as const,
 		bucketName: "google-drive",
 		isPathStyle: false,
-		getSignedObjectUrl: (key: string) => createDriveObjectUrl(key),
-		getInternalSignedObjectUrl: (key: string) =>
-			createDriveObjectUrl(key, 7200),
+		getSignedObjectUrl: (
+			key: string,
+			signingArgs?: Parameters<S3BucketAccess["getSignedObjectUrl"]>[1],
+		) => createDriveObjectUrl(key, signingArgs?.expiresIn),
+		getInternalSignedObjectUrl: (
+			key: string,
+			signingArgs?: Parameters<S3BucketAccess["getInternalSignedObjectUrl"]>[1],
+		) => createDriveObjectUrl(key, signingArgs?.expiresIn ?? 7200),
 		getObject: (key: string) =>
 			getObjectRecord(key).pipe(
 				Effect.flatMap((object) =>
