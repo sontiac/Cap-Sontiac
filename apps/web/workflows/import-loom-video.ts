@@ -2,10 +2,10 @@ import { randomUUID } from "node:crypto";
 import { db } from "@cap/database";
 import { videos, videoUploads } from "@cap/database/schema";
 import { serverEnv } from "@cap/env";
-import { S3Buckets } from "@cap/web-backend";
-import { S3Bucket, type Video } from "@cap/web-domain";
+import { Storage } from "@cap/web-backend";
+import { Video } from "@cap/web-domain";
 import { eq } from "drizzle-orm";
-import { Effect, Option } from "effect";
+import { Effect } from "effect";
 import { FatalError } from "workflow";
 import { runPromise } from "@/lib/server";
 
@@ -23,6 +23,10 @@ const MINIMUM_VIDEO_SIZE = 1024;
 function isStreamingUrl(url: string): boolean {
 	const path = (url.split("?")[0] ?? "").toLowerCase();
 	return path.endsWith(".m3u8") || path.endsWith(".mpd");
+}
+
+function isGoogleDriveResumableUrl(url: string): boolean {
+	return url.includes("googleapis.com/upload/drive/");
 }
 
 async function fetchLoomCdnUrl(
@@ -172,7 +176,7 @@ async function downloadLoomToS3(
 ): Promise<LoomProcessingInput> {
 	"use step";
 
-	const { videoId, loomVideoId, rawFileKey, bucketId } = payload;
+	const { videoId, loomVideoId, rawFileKey } = payload;
 
 	await db()
 		.update(videoUploads)
@@ -204,12 +208,25 @@ async function downloadLoomToS3(
 		};
 	}
 
-	const bucketIdOption = Option.fromNullable(bucketId).pipe(
-		Option.map((id) => S3Bucket.S3BucketId.make(id)),
-	);
-
 	const presignedPutUrl = await Effect.gen(function* () {
-		const [bucket] = yield* S3Buckets.getBucketAccess(bucketIdOption);
+		const [video] = yield* Effect.promise(() =>
+			db()
+				.select()
+				.from(videos)
+				.where(eq(videos.id, Video.VideoId.make(videoId))),
+		);
+		if (!video) {
+			return yield* Effect.fail(new FatalError("Video does not exist"));
+		}
+		const videoDomain = Video.Video.decodeSync({
+			...video,
+			bucketId: video.bucket,
+			storageIntegrationId: video.storageIntegrationId,
+			createdAt: video.createdAt.toISOString(),
+			updatedAt: video.updatedAt.toISOString(),
+			metadata: video.metadata,
+		});
+		const [bucket] = yield* Storage.getAccessForVideo(videoDomain);
 		return yield* bucket.getInternalPresignedPutUrl(rawFileKey, {
 			ContentType: "video/mp4",
 		});
@@ -223,13 +240,19 @@ async function downloadLoomToS3(
 		);
 	}
 
+	const uploadHeaders: Record<string, string> = {
+		"Content-Type": "video/mp4",
+		"Content-Length": videoBuffer.length.toString(),
+	};
+	if (isGoogleDriveResumableUrl(presignedPutUrl) && videoBuffer.length > 0) {
+		uploadHeaders["Content-Range"] =
+			`bytes 0-${videoBuffer.length - 1}/${videoBuffer.length}`;
+	}
+
 	const uploadResponse = await fetch(presignedPutUrl, {
 		method: "PUT",
 		body: new Uint8Array(videoBuffer),
-		headers: {
-			"Content-Type": "video/mp4",
-			"Content-Length": videoBuffer.length.toString(),
-		},
+		headers: uploadHeaders,
 	});
 
 	if (!uploadResponse.ok) {
@@ -330,7 +353,7 @@ async function processVideoOnMediaServer(
 ): Promise<MediaServerProcessResult> {
 	"use step";
 
-	const { videoId, userId, rawFileKey, bucketId } = payload;
+	const { videoId, userId, rawFileKey } = payload;
 
 	const mediaServerUrl = serverEnv().MEDIA_SERVER_URL;
 	if (!mediaServerUrl) {
@@ -340,13 +363,26 @@ async function processVideoOnMediaServer(
 	const webhookBaseUrl =
 		serverEnv().MEDIA_SERVER_WEBHOOK_URL || serverEnv().WEB_URL;
 
-	const bucketIdOption = Option.fromNullable(bucketId).pipe(
-		Option.map((id) => S3Bucket.S3BucketId.make(id)),
-	);
-
 	const { rawVideoUrl, outputPresignedUrl, thumbnailPresignedUrl } =
 		await Effect.gen(function* () {
-			const [bucket] = yield* S3Buckets.getBucketAccess(bucketIdOption);
+			const [video] = yield* Effect.promise(() =>
+				db()
+					.select()
+					.from(videos)
+					.where(eq(videos.id, Video.VideoId.make(videoId))),
+			);
+			if (!video) {
+				return yield* Effect.fail(new FatalError("Video does not exist"));
+			}
+			const videoDomain = Video.Video.decodeSync({
+				...video,
+				bucketId: video.bucket,
+				storageIntegrationId: video.storageIntegrationId,
+				createdAt: video.createdAt.toISOString(),
+				updatedAt: video.updatedAt.toISOString(),
+				metadata: video.metadata,
+			});
+			const [bucket] = yield* Storage.getAccessForVideo(videoDomain);
 
 			const outputKey = `${userId}/${videoId}/result.mp4`;
 			const thumbnailKey = `${userId}/${videoId}/screenshot/screen-capture.jpg`;
