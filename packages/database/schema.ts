@@ -298,9 +298,9 @@ export const videos = mysqlTable(
 		orgId: nanoIdRequired("orgId").$type<Organisation.OrganisationId>(),
 		name: varchar("name", { length: 255 }).notNull().default("My Video"),
 		bucket: nanoIdNullable("bucket").$type<S3Bucket.S3BucketId>(),
-		storageIntegrationId: nanoIdNullable(
-			"storageIntegrationId",
-		).$type<Storage.StorageIntegrationId>(),
+		storageIntegrationId: nanoIdNullable("storageIntegrationId")
+			.references(() => storageIntegrations.id, { onDelete: "restrict" })
+			.$type<Storage.StorageIntegrationId>(),
 		// in seconds
 		duration: float("duration"),
 		width: int("width"),
@@ -586,6 +586,16 @@ export const storageIntegrations = mysqlTable(
 			.$type<Storage.StorageIntegrationStatus>(),
 		active: boolean("active").notNull().default(false),
 		encryptedConfig: encryptedText("encryptedConfig").notNull(),
+		googleDriveAccessToken: encryptedTextNullable("googleDriveAccessToken"),
+		googleDriveAccessTokenExpiresAt: timestamp(
+			"googleDriveAccessTokenExpiresAt",
+		),
+		googleDriveTokenRefreshLeaseId: varchar("googleDriveTokenRefreshLeaseId", {
+			length: 64,
+		}),
+		googleDriveTokenRefreshLeaseExpiresAt: timestamp(
+			"googleDriveTokenRefreshLeaseExpiresAt",
+		),
 		createdAt: timestamp("createdAt").notNull().defaultNow(),
 		updatedAt: timestamp("updatedAt").notNull().defaultNow().onUpdateNow(),
 	},
@@ -604,6 +614,7 @@ export const storageObjects = mysqlTable(
 		id: nanoId("id").notNull().primaryKey().$type<Storage.StorageObjectId>(),
 		integrationId: nanoId("integrationId")
 			.notNull()
+			.references(() => storageIntegrations.id, { onDelete: "restrict" })
 			.$type<Storage.StorageIntegrationId>(),
 		ownerId: nanoId("ownerId").notNull().$type<User.UserId>(),
 		videoId: nanoIdNullable("videoId").$type<Video.VideoId>(),

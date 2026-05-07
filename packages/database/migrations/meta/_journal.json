@@ -127,6 +127,20 @@
 			"when": 1778099532336,
 			"tag": "0017_productive_betty_brant",
 			"breakpoints": true
+		},
+		{
+			"idx": 18,
+			"version": "5",
+			"when": 1778153157657,
+			"tag": "0018_loud_mongu",
+			"breakpoints": true
+		},
+		{
+			"idx": 19,
+			"version": "5",
+			"when": 1778154209547,
+			"tag": "0019_solid_paibok",
+			"breakpoints": true
 		}
 	]
 }
