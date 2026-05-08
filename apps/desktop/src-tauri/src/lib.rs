@@ -685,6 +685,10 @@ async fn set_mic_input(state: MutableState<'_, App>, label: Option<String>) -> R
     let (mic_feed, studio_handle, previous_label, app_handle) = {
         let mut app = state.write().await;
         if desired_label == app.selected_mic_label {
+            if desired_label.is_some() && !matches!(app.recording_state, RecordingState::Active(_))
+            {
+                app.ensure_selected_mic_ready().await?;
+            }
             return Ok(());
         }
 
