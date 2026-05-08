@@ -863,7 +863,13 @@ async fn set_camera_input(
                 let app = &mut *state.write().await;
                 app.camera_in_use = false;
                 app.selected_camera_id = None;
-                app.camera_preview.begin_shutdown()
+                app.camera_cleanup_done = true;
+                if skip_camera_window {
+                    app.camera_preview.begin_shutdown()
+                } else {
+                    app.camera_preview.pause();
+                    None
+                }
             };
 
             camera_feed
@@ -875,8 +881,8 @@ async fn set_camera_input(
                 let _ = tokio::time::timeout(Duration::from_millis(500), rx).await;
             }
 
-            if !skip_camera_window {
-                windows::cleanup_camera_window(&app_handle, None, true, true).await;
+            if !skip_camera_window && let Some(window) = CapWindowId::Camera.get(&app_handle) {
+                let _ = window.hide();
             }
         }
         Some(id) => {
