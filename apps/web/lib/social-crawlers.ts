@@ -28,22 +28,6 @@ export const SOCIAL_REFERRER_DOMAINS = [
 	"t.co",
 ] as const;
 
-export const SOCIAL_CRAWLER_ROBOTS_USER_AGENTS = [
-	"Twitterbot",
-	"facebookexternalhit",
-	"Facebot",
-	"Slackbot-LinkExpanding",
-	"LinkedInBot",
-	"WhatsApp",
-	"Discordbot",
-	"TelegramBot",
-	"SkypeUriPreview",
-	"MicrosoftPreview",
-	"Pinterestbot",
-	"redditbot",
-	"Embedly",
-] as const;
-
 export function isSocialCrawlerUserAgent(userAgent: string) {
 	const normalizedUserAgent = userAgent.toLowerCase();
 	return SOCIAL_CRAWLER_USER_AGENT_PATTERNS.some((pattern) =>
