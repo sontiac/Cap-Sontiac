@@ -175,57 +175,76 @@ export async function generateMetadata(
 		Effect.map(
 			Option.match({
 				onNone: () => notFound(),
-				onSome: ([video]) => ({
-					title: `${video.name} | Cap Recording`,
-					description: "Watch this video on Cap",
-					openGraph: {
-						images: [
-							{
-								url: new URL(
-									`/api/video/og?videoId=${videoId}`,
-									buildEnv.NEXT_PUBLIC_WEB_URL,
-								).toString(),
-								width: 1200,
-								height: 630,
-							},
-						],
-						videos: [
-							{
-								url: new URL(
-									`/api/playlist?videoId=${video.id}`,
-									buildEnv.NEXT_PUBLIC_WEB_URL,
-								).toString(),
-								width: 1280,
-								height: 720,
-								type: "video/mp4",
-							},
-						],
-					},
-					twitter: {
-						card: "player",
+				onSome: ([video]) => {
+					const previewImageUrl = new URL(
+						`/api/video/preview?videoId=${videoId}&fallback=og`,
+						buildEnv.NEXT_PUBLIC_WEB_URL,
+					).toString();
+					const ogImageUrl = new URL(
+						`/api/video/og?videoId=${videoId}`,
+						buildEnv.NEXT_PUBLIC_WEB_URL,
+					).toString();
+					const playlistUrl = new URL(
+						`/api/playlist?videoId=${video.id}`,
+						buildEnv.NEXT_PUBLIC_WEB_URL,
+					).toString();
+
+					return {
 						title: `${video.name} | Cap Recording`,
 						description: "Watch this video on Cap",
-						images: [
-							new URL(
-								`/api/video/og?videoId=${videoId}`,
-								buildEnv.NEXT_PUBLIC_WEB_URL,
-							).toString(),
-						],
-						players: {
-							playerUrl: new URL(
-								`/s/${videoId}`,
-								buildEnv.NEXT_PUBLIC_WEB_URL,
-							).toString(),
-							streamUrl: new URL(
-								`/api/playlist?videoId=${video.id}`,
-								buildEnv.NEXT_PUBLIC_WEB_URL,
-							).toString(),
-							width: 1280,
-							height: 720,
+						openGraph: {
+							images: [
+								{
+									url: previewImageUrl,
+									width: 480,
+									height: 270,
+									type: "image/gif",
+								},
+								{
+									url: ogImageUrl,
+									width: 1200,
+									height: 630,
+								},
+							],
+							videos: [
+								{
+									url: playlistUrl,
+									width: 1280,
+									height: 720,
+									type: "video/mp4",
+								},
+							],
 						},
-					},
-					robots: isAllowedReferrer ? "index, follow" : "noindex, nofollow",
-				}),
+						twitter: {
+							card: "player",
+							title: `${video.name} | Cap Recording`,
+							description: "Watch this video on Cap",
+							images: [
+								{
+									url: previewImageUrl,
+									width: 480,
+									height: 270,
+									type: "image/gif",
+								},
+								{
+									url: ogImageUrl,
+									width: 1200,
+									height: 630,
+								},
+							],
+							players: {
+								playerUrl: new URL(
+									`/s/${videoId}`,
+									buildEnv.NEXT_PUBLIC_WEB_URL,
+								).toString(),
+								streamUrl: playlistUrl,
+								width: 1280,
+								height: 720,
+							},
+						},
+						robots: isAllowedReferrer ? "index, follow" : "noindex, nofollow",
+					};
+				},
 			}),
 		),
 		Effect.catchTags({

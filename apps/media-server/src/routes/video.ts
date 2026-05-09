@@ -5,6 +5,7 @@ import { validateMediaServerSecret } from "../lib/auth";
 import type { ResilientInputFlags } from "../lib/ffmpeg-video";
 import {
 	downloadVideoToTemp,
+	generatePreviewGif,
 	generateThumbnail,
 	processVideo,
 	repairContainer,
@@ -63,6 +64,7 @@ const processSchema = z.object({
 	videoUrl: z.string().url(),
 	outputPresignedUrl: z.string().url(),
 	thumbnailPresignedUrl: z.string().url().optional(),
+	previewGifPresignedUrl: z.string().url().optional(),
 	webhookUrl: z.string().url().optional(),
 	webhookSecret: z.string().optional(),
 	inputExtension: z.string().optional(),
@@ -463,6 +465,7 @@ video.post("/process", async (c) => {
 		videoUrl,
 		outputPresignedUrl,
 		thumbnailPresignedUrl,
+		previewGifPresignedUrl,
 		webhookUrl,
 		webhookSecret,
 	} = result.data;
@@ -475,6 +478,7 @@ video.post("/process", async (c) => {
 		videoUrl,
 		outputPresignedUrl,
 		thumbnailPresignedUrl,
+		previewGifPresignedUrl,
 		result.data,
 	).catch((err) => {
 		console.error(
@@ -693,11 +697,47 @@ async function processWithResilientRetry(
 	});
 }
 
+async function generateAndUploadPreviewGif(
+	inputPath: string,
+	duration: number,
+	previewGifPresignedUrl: string | undefined,
+	abortSignal: AbortSignal | undefined,
+	logPrefix: string,
+): Promise<void> {
+	if (!previewGifPresignedUrl) return;
+
+	let previewGifFile: TempFileHandle | null = null;
+
+	try {
+		previewGifFile = await generatePreviewGif(
+			inputPath,
+			duration,
+			{},
+			abortSignal,
+		);
+		await uploadFileToS3(
+			previewGifFile.path,
+			previewGifPresignedUrl,
+			"image/gif",
+		);
+	} catch (previewErr) {
+		if (abortSignal?.aborted) {
+			throw previewErr instanceof Error
+				? previewErr
+				: new Error("Preview GIF generation aborted");
+		}
+		console.warn(`[${logPrefix}] Preview GIF generation failed:`, previewErr);
+	} finally {
+		await previewGifFile?.cleanup();
+	}
+}
+
 async function processVideoAsync(
 	jobId: string,
 	videoUrl: string,
 	outputPresignedUrl: string,
 	thumbnailPresignedUrl: string | undefined,
+	previewGifPresignedUrl: string | undefined,
 	options: z.infer<typeof processSchema>,
 ): Promise<void> {
 	const job = getJob(jobId);
@@ -778,20 +818,30 @@ async function processVideoAsync(
 
 		await uploadFileToS3(outputTempFile.path, outputPresignedUrl, "video/mp4");
 
-		if (thumbnailPresignedUrl) {
+		if (thumbnailPresignedUrl || previewGifPresignedUrl) {
 			updateJob(jobId, {
 				phase: "generating_thumbnail",
 				progress: 90,
-				message: "Generating thumbnail...",
+				message: "Generating preview assets...",
 			});
 			await sendWebhook(job);
+		}
 
+		if (thumbnailPresignedUrl) {
 			const thumbnailData = await generateThumbnail(
 				outputTempFile.path,
 				metadata.duration,
 			);
 			await uploadToS3(thumbnailData, thumbnailPresignedUrl, "image/jpeg");
 		}
+
+		await generateAndUploadPreviewGif(
+			outputTempFile.path,
+			metadata.duration,
+			previewGifPresignedUrl,
+			abortController.signal,
+			"video/process",
+		);
 
 		updateJob(jobId, {
 			phase: "complete",
@@ -991,6 +1041,7 @@ const muxSegmentsSchema = z.object({
 	userId: z.string(),
 	outputPresignedUrl: z.string().url(),
 	thumbnailPresignedUrl: z.string().url().optional(),
+	previewGifPresignedUrl: z.string().url().optional(),
 	webhookUrl: z.string().url().optional(),
 	webhookSecret: z.string().optional(),
 	videoInitUrl: z.string().url(),
@@ -1017,6 +1068,7 @@ video.post("/mux-segments", async (c) => {
 		userId,
 		outputPresignedUrl,
 		thumbnailPresignedUrl,
+		previewGifPresignedUrl,
 		webhookUrl,
 		webhookSecret,
 	} = body.data;
@@ -1046,6 +1098,7 @@ video.post("/mux-segments", async (c) => {
 		videoId,
 		outputPresignedUrl,
 		thumbnailPresignedUrl,
+		previewGifPresignedUrl,
 		videoInitUrl,
 		videoSegUrls,
 		audioInitUrl ?? null,
@@ -1196,6 +1249,7 @@ async function muxSegmentsAsync(
 	videoId: string,
 	outputPresignedUrl: string,
 	thumbnailPresignedUrl: string | undefined,
+	previewGifPresignedUrl: string | undefined,
 	videoInitUrl: string,
 	videoSegmentUrls: string[],
 	audioInitUrl: string | null,
@@ -1210,6 +1264,8 @@ async function muxSegmentsAsync(
 		"cap-media-server",
 		`mux-${jobId}`,
 	);
+	const abortController = new AbortController();
+	updateJob(jobId, { abortController });
 
 	try {
 		await ensureTempDir();
@@ -1354,14 +1410,16 @@ async function muxSegmentsAsync(
 			metadata = probeResult;
 		} catch {}
 
-		if (thumbnailPresignedUrl) {
+		if (thumbnailPresignedUrl || previewGifPresignedUrl) {
 			updateJob(jobId, {
 				phase: "generating_thumbnail",
 				progress: 90,
-				message: "Generating thumbnail...",
+				message: "Generating preview assets...",
 			});
 			sendCurrentJobWebhook(jobId);
+		}
 
+		if (thumbnailPresignedUrl) {
 			try {
 				const duration = metadata?.duration ?? 0;
 				const thumbnailData = await generateThumbnail(resultPath, duration);
@@ -1373,6 +1431,14 @@ async function muxSegmentsAsync(
 				);
 			}
 		}
+
+		await generateAndUploadPreviewGif(
+			resultPath,
+			metadata?.duration ?? 0,
+			previewGifPresignedUrl,
+			abortController.signal,
+			"mux-segments",
+		);
 
 		updateJob(jobId, {
 			phase: "complete",
