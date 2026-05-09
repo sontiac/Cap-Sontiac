@@ -14,6 +14,7 @@ import {
 	videos,
 } from "@cap/database/schema";
 import { serverEnv } from "@cap/env";
+import { userIsPro } from "@cap/utils";
 import {
 	type GoogleDriveIntegrationConfig,
 	getGoogleDriveAccessToken,
@@ -28,6 +29,8 @@ import { runPromise } from "@/lib/server";
 
 const googleDriveProvider = "googleDrive";
 const settingsPath = "/dashboard/settings/organization/integrations";
+const proRequiredMessage =
+	"Cap Pro is required to manage organization integrations";
 
 type OrganizationStorageProvider = "s3" | "googleDrive";
 
@@ -111,6 +114,14 @@ const requireOrganizationOwner = async (
 	return { user, organization };
 };
 
+const requireOrganizationOwnerPro = async (
+	organizationId: Organisation.OrganisationId,
+) => {
+	const result = await requireOrganizationOwner(organizationId);
+	if (!userIsPro(result.user)) throw new Error(proRequiredMessage);
+	return result;
+};
+
 const decryptS3Config = async (
 	bucket: typeof s3Buckets.$inferSelect,
 	exposeSecrets: boolean,
@@ -154,6 +165,48 @@ const toReadableError = (error: unknown) => {
 		if (cause instanceof Error) return cause;
 	}
 	return new Error("Google Drive request failed");
+};
+
+const getS3ErrorMetadata = (error: unknown) => {
+	if (!error || typeof error !== "object" || !("$metadata" in error)) {
+		return undefined;
+	}
+
+	return error.$metadata as { httpStatusCode?: number } | undefined;
+};
+
+const getS3ConnectionErrorMessage = (error: unknown, bucketName: string) => {
+	if (!(error instanceof Error)) return "Failed to connect to S3";
+
+	if (error.name === "AbortError" || error.name === "TimeoutError") {
+		return "Connection timed out after 5 seconds. Please check the endpoint URL and your network connection.";
+	}
+
+	if (error.name === "NoSuchBucket") {
+		return `Bucket '${bucketName}' does not exist`;
+	}
+
+	if (error.name === "NetworkingError") {
+		return "Network error. Please check the endpoint URL and your network connection.";
+	}
+
+	if (error.name === "InvalidAccessKeyId") {
+		return "Invalid Access Key ID";
+	}
+
+	if (error.name === "SignatureDoesNotMatch") {
+		return "Invalid Secret Access Key";
+	}
+
+	if (error.name === "AccessDenied") {
+		return "Access denied. Please check your credentials and bucket permissions.";
+	}
+
+	if (getS3ErrorMetadata(error)?.httpStatusCode === 301) {
+		return "Received 301 redirect. This usually means the endpoint URL is incorrect or the bucket is in a different region.";
+	}
+
+	return "Failed to connect to S3";
 };
 
 const driveHasStoredData = async (
@@ -328,7 +381,7 @@ export async function getOrganizationStorageSettings(
 }
 
 export async function saveOrganizationS3Config(input: S3ConfigInput) {
-	const { user } = await requireOrganizationOwner(input.organizationId);
+	const { user } = await requireOrganizationOwnerPro(input.organizationId);
 	const credentials = await getS3InputCredentials(input);
 	const encryptedConfig = {
 		provider: input.provider,
@@ -360,7 +413,7 @@ export async function saveOrganizationS3Config(input: S3ConfigInput) {
 export async function removeOrganizationS3Config(
 	organizationId: Organisation.OrganisationId,
 ) {
-	await requireOrganizationOwner(organizationId);
+	await requireOrganizationOwnerPro(organizationId);
 	await db()
 		.update(s3Buckets)
 		.set({ active: false })
@@ -370,7 +423,7 @@ export async function removeOrganizationS3Config(
 }
 
 export async function testOrganizationS3Config(input: S3ConfigInput) {
-	await requireOrganizationOwner(input.organizationId);
+	await requireOrganizationOwnerPro(input.organizationId);
 	const credentials = await getS3InputCredentials(input);
 	const controller = new AbortController();
 	const timeoutId = setTimeout(() => controller.abort(), 5000);
@@ -388,6 +441,8 @@ export async function testOrganizationS3Config(input: S3ConfigInput) {
 			abortSignal: controller.signal,
 		});
 		return { success: true };
+	} catch (error) {
+		throw new Error(getS3ConnectionErrorMessage(error, input.bucketName));
 	} finally {
 		clearTimeout(timeoutId);
 	}
@@ -400,7 +455,7 @@ export async function setOrganizationStorageProvider({
 	organizationId: Organisation.OrganisationId;
 	provider: OrganizationStorageProvider;
 }) {
-	await requireOrganizationOwner(organizationId);
+	await requireOrganizationOwnerPro(organizationId);
 
 	if (provider === "s3") {
 		const bucket = await getOrganizationBucket(organizationId);
@@ -440,7 +495,7 @@ export async function setOrganizationStorageProvider({
 export async function connectOrganizationGoogleDrive(
 	organizationId: Organisation.OrganisationId,
 ) {
-	const { user } = await requireOrganizationOwner(organizationId);
+	const { user } = await requireOrganizationOwnerPro(organizationId);
 	const state = createGoogleDriveState(user.id, organizationId);
 	return { url: getGoogleDriveAuthUrl({ state }) };
 }
@@ -448,7 +503,7 @@ export async function connectOrganizationGoogleDrive(
 export async function disconnectOrganizationGoogleDrive(
 	organizationId: Organisation.OrganisationId,
 ) {
-	await requireOrganizationOwner(organizationId);
+	await requireOrganizationOwnerPro(organizationId);
 	await db()
 		.update(storageIntegrations)
 		.set({
@@ -474,7 +529,7 @@ export async function disconnectOrganizationGoogleDrive(
 export async function getOrganizationGoogleDrivePickerToken(
 	organizationId: Organisation.OrganisationId,
 ) {
-	await requireOrganizationOwner(organizationId);
+	await requireOrganizationOwnerPro(organizationId);
 	const drive = await getOrganizationDrive(organizationId);
 	if (!drive || drive.status !== "active") {
 		throw new Error("Google Drive is not connected");
@@ -501,7 +556,7 @@ export async function listOrganizationGoogleDriveFolders({
 	organizationId: Organisation.OrganisationId;
 	parentId?: string;
 }) {
-	await requireOrganizationOwner(organizationId);
+	await requireOrganizationOwnerPro(organizationId);
 	const drive = await getOrganizationDrive(organizationId);
 	if (!drive || drive.status !== "active") {
 		throw new Error("Google Drive is not connected");
@@ -563,7 +618,7 @@ export async function setOrganizationGoogleDriveLocation({
 	driveId?: string | null;
 	driveName?: string | null;
 }) {
-	const { user } = await requireOrganizationOwner(organizationId);
+	const { user } = await requireOrganizationOwnerPro(organizationId);
 	const drive = await getOrganizationDrive(organizationId);
 	if (!drive || drive.status !== "active") {
 		throw new Error("Google Drive is not connected");
