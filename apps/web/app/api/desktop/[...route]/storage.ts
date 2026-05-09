@@ -16,18 +16,27 @@ import {
 	getGoogleDriveAuthUrl,
 	getGoogleDriveUserEmail,
 } from "@cap/web-backend";
-import { Storage, User } from "@cap/web-domain";
+import { Organisation, Storage, User } from "@cap/web-domain";
 import { zValidator } from "@hono/zod-validator";
-import { and, desc, eq } from "drizzle-orm";
+import { and, desc, eq, isNull } from "drizzle-orm";
 import { Hono } from "hono";
 import { z } from "zod";
 import { getCachedGoogleDriveStorageQuota } from "@/lib/google-drive-storage-quota";
 import { runPromise } from "@/lib/server";
 import { withAuth } from "../../utils";
+import {
+	getAccessibleOrganization,
+	getActiveOrganizationGoogleDriveIntegration,
+	getManagedOrganizationStorage,
+	getOrganizationGoogleDriveIntegration,
+	requireOrganizationOwner,
+} from "./organizationStorage";
 
 const GoogleDriveOAuthState = z.object({
 	userId: z.string(),
 	expiresAt: z.number(),
+	scope: z.enum(["user", "organization"]).default("user"),
+	organizationId: z.string().optional(),
 });
 
 const googleDriveProvider = "googleDrive";
@@ -37,6 +46,21 @@ const RefreshStorageQuotaQuery = z.object({
 		.union([z.literal("true"), z.literal("false"), z.boolean()])
 		.optional()
 		.transform((value) => value === true || value === "true"),
+	orgId: z
+		.string()
+		.optional()
+		.transform((value) =>
+			value ? Organisation.OrganisationId.make(value) : undefined,
+		),
+});
+
+const ConnectGoogleDriveStorageBody = z.object({
+	orgId: z
+		.string()
+		.optional()
+		.transform((value) =>
+			value ? Organisation.OrganisationId.make(value) : undefined,
+		),
 });
 
 const signStatePayload = (payload: string) =>
@@ -44,11 +68,16 @@ const signStatePayload = (payload: string) =>
 		.update(payload)
 		.digest("base64url");
 
-const createGoogleDriveState = (userId: string) => {
+const createGoogleDriveState = (
+	userId: string,
+	organizationId?: Organisation.OrganisationId,
+) => {
 	const payload = Buffer.from(
 		JSON.stringify({
 			userId,
 			expiresAt: Date.now() + 10 * 60 * 1000,
+			scope: organizationId ? "organization" : "user",
+			organizationId,
 		}),
 	).toString("base64url");
 	return `${payload}.${signStatePayload(payload)}`;
@@ -71,7 +100,13 @@ const verifyGoogleDriveState = (state: string) => {
 		JSON.parse(Buffer.from(payload, "base64url").toString("utf8")),
 	);
 	if (parsed.expiresAt < Date.now()) throw new Error("Expired OAuth state");
-	return User.UserId.make(parsed.userId);
+	return {
+		userId: User.UserId.make(parsed.userId),
+		organizationId:
+			parsed.scope === "organization" && parsed.organizationId
+				? Organisation.OrganisationId.make(parsed.organizationId)
+				: undefined,
+	};
 };
 
 const escapeHtml = (value: string) =>
@@ -110,6 +145,7 @@ const getGoogleDriveIntegration = (ownerId: User.UserId) =>
 		.where(
 			and(
 				eq(storageIntegrations.ownerId, ownerId),
+				isNull(storageIntegrations.organizationId),
 				eq(storageIntegrations.provider, googleDriveProvider),
 			),
 		)
@@ -128,7 +164,53 @@ protectedApp.get(
 	zValidator("query", RefreshStorageQuotaQuery),
 	async (c) => {
 		const user = c.get("user");
-		const { refreshStorageQuota } = c.req.valid("query");
+		const { refreshStorageQuota, orgId } = c.req.valid("query");
+		if (orgId) {
+			const organization = await getAccessibleOrganization(user.id, orgId);
+			if (!organization)
+				return c.json({ error: "forbidden_org" }, { status: 403 });
+
+			const managedByOrganization = await getManagedOrganizationStorage(
+				user.id,
+				orgId,
+			);
+			if (managedByOrganization) {
+				const drive =
+					managedByOrganization.activeProvider === "googleDrive"
+						? await getActiveOrganizationGoogleDriveIntegration(orgId)
+						: await getOrganizationGoogleDriveIntegration(orgId);
+				const storageQuota =
+					drive && drive.status === "active"
+						? await getCachedGoogleDriveStorageQuota(drive, {
+								forceRefresh: refreshStorageQuota,
+							})
+						: null;
+
+				return c.json({
+					activeProvider: managedByOrganization.activeProvider,
+					managedByOrganization,
+					googleDrive:
+						drive && managedByOrganization.activeProvider === "googleDrive"
+							? {
+									id: drive.id,
+									connected: drive.status === "active",
+									active: drive.active,
+									status: drive.status,
+									displayName: drive.displayName,
+									storageQuota,
+								}
+							: {
+									id: null,
+									connected: false,
+									active: false,
+									status: null,
+									displayName: null,
+									storageQuota: null,
+								},
+				});
+			}
+		}
+
 		const [drive] = await getGoogleDriveIntegration(user.id);
 		const storageQuota = drive
 			? await getCachedGoogleDriveStorageQuota(drive, {
@@ -139,6 +221,7 @@ protectedApp.get(
 		return c.json({
 			activeProvider:
 				drive?.active && drive.status === "active" ? "googleDrive" : "s3",
+			managedByOrganization: null,
 			googleDrive: drive
 				? {
 						id: drive.id,
@@ -160,17 +243,28 @@ protectedApp.get(
 	},
 );
 
-protectedApp.post("/google-drive/connect", async (c) => {
-	const user = c.get("user");
-	if (!userIsPro(user)) {
-		return c.json({ error: "upgrade_required" }, { status: 403 });
-	}
+protectedApp.post(
+	"/google-drive/connect",
+	zValidator("json", ConnectGoogleDriveStorageBody),
+	async (c) => {
+		const user = c.get("user");
+		const { orgId } = c.req.valid("json");
+		if (!userIsPro(user)) {
+			return c.json({ error: "upgrade_required" }, { status: 403 });
+		}
 
-	const state = createGoogleDriveState(user.id);
-	return c.json({
-		url: getGoogleDriveAuthUrl({ state }),
-	});
-});
+		if (orgId) {
+			const organization = await requireOrganizationOwner(user.id, orgId);
+			if (!organization)
+				return c.json({ error: "forbidden_org" }, { status: 403 });
+		}
+
+		const state = createGoogleDriveState(user.id, orgId);
+		return c.json({
+			url: getGoogleDriveAuthUrl({ state }),
+		});
+	},
+);
 
 protectedApp.post("/google-drive/test", async (c) => {
 	const user = c.get("user");
@@ -208,6 +302,7 @@ protectedApp.post(
 							.where(
 								and(
 									eq(storageIntegrations.ownerId, user.id),
+									isNull(storageIntegrations.organizationId),
 									eq(storageIntegrations.provider, googleDriveProvider),
 									eq(storageIntegrations.status, "active"),
 								),
@@ -226,7 +321,12 @@ protectedApp.post(
 			await tx
 				.update(storageIntegrations)
 				.set({ active: false })
-				.where(eq(storageIntegrations.ownerId, user.id));
+				.where(
+					and(
+						eq(storageIntegrations.ownerId, user.id),
+						isNull(storageIntegrations.organizationId),
+					),
+				);
 
 			if (provider === "googleDrive" && driveToActivate) {
 				await tx
@@ -262,6 +362,7 @@ protectedApp.delete("/google-drive/disconnect", async (c) => {
 		.where(
 			and(
 				eq(storageIntegrations.ownerId, user.id),
+				isNull(storageIntegrations.organizationId),
 				eq(storageIntegrations.provider, googleDriveProvider),
 			),
 		);
@@ -296,7 +397,15 @@ app.get("/google-drive/callback", async (c) => {
 			);
 		}
 
-		const userId = verifyGoogleDriveState(state);
+		const { userId, organizationId } = verifyGoogleDriveState(state);
+		if (organizationId) {
+			const organization = await requireOrganizationOwner(
+				userId,
+				organizationId,
+			);
+			if (!organization) throw new Error("Organization access denied");
+		}
+
 		const tokens = await exchangeGoogleDriveCode(code).pipe(runPromise);
 		if (!tokens.refresh_token) throw new Error("Missing refresh token");
 
@@ -304,30 +413,39 @@ app.get("/google-drive/callback", async (c) => {
 			refreshToken: tokens.refresh_token,
 			folderId: "",
 			scope: tokens.scope,
+			folderLayout: organizationId ? "userVideo" : "video",
 		};
-		const folderId = await ensureGoogleDriveFolder(initialConfig, "Cap").pipe(
-			runPromise,
-		);
-		const config: GoogleDriveIntegrationConfig = {
-			...initialConfig,
-			folderId,
-		};
+		const config: GoogleDriveIntegrationConfig = organizationId
+			? initialConfig
+			: {
+					...initialConfig,
+					folderId: await ensureGoogleDriveFolder(initialConfig, "Cap").pipe(
+						runPromise,
+					),
+					folderName: "Cap",
+				};
 		const email = await getGoogleDriveUserEmail(config).pipe(runPromise);
 		const encryptedConfig = await encrypt(
 			JSON.stringify({ ...config, email: email ?? undefined }),
 		);
 		const displayName = email ? `Google Drive (${email})` : "Google Drive";
+		const active = !organizationId;
 
 		await db().transaction(async (tx) => {
+			const integrationScope = organizationId
+				? and(
+						eq(storageIntegrations.organizationId, organizationId),
+						eq(storageIntegrations.provider, googleDriveProvider),
+					)
+				: and(
+						eq(storageIntegrations.ownerId, userId),
+						isNull(storageIntegrations.organizationId),
+						eq(storageIntegrations.provider, googleDriveProvider),
+					);
 			const existingIntegrations = await tx
 				.select()
 				.from(storageIntegrations)
-				.where(
-					and(
-						eq(storageIntegrations.ownerId, userId),
-						eq(storageIntegrations.provider, googleDriveProvider),
-					),
-				)
+				.where(integrationScope)
 				.orderBy(desc(storageIntegrations.updatedAt));
 
 			const dependencyChecks = await Promise.all(
@@ -356,20 +474,17 @@ app.get("/google-drive/callback", async (c) => {
 			await tx
 				.update(storageIntegrations)
 				.set({ active: false, status: "disconnected" })
-				.where(
-					and(
-						eq(storageIntegrations.ownerId, userId),
-						eq(storageIntegrations.provider, googleDriveProvider),
-					),
-				);
+				.where(integrationScope);
 
 			if (reusable) {
 				await tx
 					.update(storageIntegrations)
 					.set({
+						ownerId: userId,
+						organizationId: organizationId ?? null,
 						displayName,
 						status: "active",
-						active: true,
+						active,
 						encryptedConfig,
 						googleDriveAccessToken: null,
 						googleDriveAccessTokenExpiresAt: null,
@@ -384,10 +499,11 @@ app.get("/google-drive/callback", async (c) => {
 			await tx.insert(storageIntegrations).values({
 				id: Storage.StorageIntegrationId.make(nanoId()),
 				ownerId: userId,
+				organizationId: organizationId ?? null,
 				provider: googleDriveProvider,
 				displayName,
 				status: "active",
-				active: true,
+				active,
 				encryptedConfig,
 			});
 		});
