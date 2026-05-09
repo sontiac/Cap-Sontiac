@@ -109,7 +109,7 @@ describe("processVideo integration tests", () => {
 				status: 200,
 				statusText: "OK",
 			});
-		}) as typeof fetch;
+		}) as unknown as typeof fetch;
 
 		try {
 			await uploadToS3(
@@ -133,7 +133,7 @@ describe("processVideo integration tests", () => {
 				status: 403,
 				statusText: "Forbidden",
 			});
-		}) as typeof fetch;
+		}) as unknown as typeof fetch;
 
 		try {
 			await expect(
@@ -157,7 +157,7 @@ describe("processVideo integration tests", () => {
 			new Response(
 				'<MPD><Period><AdaptationSet><Representation><SegmentTemplate initialization="init.mp4" media="chunk-$Number$.m4s"/></Representation></AdaptationSet></Period></MPD>',
 				{ status: 200, statusText: "OK" },
-			)) as typeof fetch;
+			)) as unknown as typeof fetch;
 
 		try {
 			const path = await materializeMpdManifest(
