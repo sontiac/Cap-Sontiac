@@ -180,10 +180,6 @@ export async function generateMetadata(
 						`/api/video/preview?videoId=${videoId}&fallback=og`,
 						buildEnv.NEXT_PUBLIC_WEB_URL,
 					).toString();
-					const ogImageUrl = new URL(
-						`/api/video/og?videoId=${videoId}`,
-						buildEnv.NEXT_PUBLIC_WEB_URL,
-					).toString();
 					const playlistUrl = new URL(
 						`/api/playlist?videoId=${video.id}`,
 						buildEnv.NEXT_PUBLIC_WEB_URL,
@@ -193,19 +189,7 @@ export async function generateMetadata(
 						title: `${video.name} | Cap Recording`,
 						description: "Watch this video on Cap",
 						openGraph: {
-							images: [
-								{
-									url: previewImageUrl,
-									width: 480,
-									height: 270,
-									type: "image/gif",
-								},
-								{
-									url: ogImageUrl,
-									width: 1200,
-									height: 630,
-								},
-							],
+							images: [{ url: previewImageUrl }],
 							videos: [
 								{
 									url: playlistUrl,

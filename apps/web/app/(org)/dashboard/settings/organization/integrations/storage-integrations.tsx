@@ -6,9 +6,7 @@ import {
 	ChevronRightIcon,
 	DatabaseIcon,
 	FolderOpenIcon,
-	HardDriveIcon,
 	InfoIcon,
-	UserIcon,
 	VideoIcon,
 } from "lucide-react";
 import { useRouter } from "next/navigation";
@@ -199,16 +197,6 @@ export function OrganizationStorageIntegrations({
 			provider === "s3" ? "S3 enabled" : "Google Drive enabled",
 		);
 
-	const setDriveRootLocation = () =>
-		runMutation(
-			() =>
-				setOrganizationGoogleDriveLocation({
-					organizationId,
-					folderId: "root",
-				}),
-			"Google Drive location updated",
-		);
-
 	const loadFolderBrowser = async (
 		parent: { id: string; name: string },
 		history: Array<{ id: string; name: string }>,
@@ -295,6 +283,12 @@ export function OrganizationStorageIntegrations({
 	const hasDriveLocation = !!settings.googleDrive?.folderId;
 	const selectedDriveName = settings.googleDrive?.driveName ?? "My Drive";
 	const selectedFolderName = settings.googleDrive?.folderName ?? null;
+	const driveIsActive =
+		bothConfigured && settings.activeProvider === "googleDrive";
+	const folderBreadcrumb = selectedFolderName
+		? `${selectedDriveName} › ${selectedFolderName}`
+		: selectedDriveName;
+	const filePathPreview = `${selectedFolderName ?? selectedDriveName} / user-id / video-id`;
 
 	return (
 		<div className="flex flex-col gap-4">
@@ -570,76 +564,46 @@ export function OrganizationStorageIntegrations({
 					<div className="border-t border-gray-3 px-3.5 py-4">
 						{settings.googleDrive?.connected ? (
 							<div className="flex flex-col gap-3">
-								{(settings.googleDrive.email ||
-									settings.googleDrive.folderName) && (
-									<div className="flex items-center gap-4 text-[12px]">
-										{settings.googleDrive.email && (
-											<span className="text-gray-10">
-												{settings.googleDrive.email}
-											</span>
-										)}
-										{settings.googleDrive.folderName && (
-											<span className="text-gray-12 font-medium">
-												{settings.googleDrive.folderName}
-											</span>
-										)}
-									</div>
+								{settings.googleDrive.email && (
+									<p className="text-[12px] text-gray-10">
+										Connected as{" "}
+										<span className="text-gray-12 font-medium">
+											{settings.googleDrive.email}
+										</span>
+									</p>
 								)}
 
-								<div className="flex flex-col gap-2.5 rounded-lg border border-gray-3 bg-gray-2 p-3">
+								<div className="flex flex-col gap-3 rounded-lg border border-gray-3 bg-gray-2 p-3">
 									<div className="flex items-center justify-between">
 										<p className="text-[12px] font-medium text-gray-12">
 											Storage destination
 										</p>
-										{settings.activeProvider === "googleDrive" ? (
+										{driveIsActive ? (
 											<span className="inline-flex items-center gap-1 px-2 py-0.5 text-[11px] font-medium rounded-md bg-green-500/10 text-green-600">
 												<span className="size-1.5 rounded-full bg-green-500" />
 												Enabled
 											</span>
 										) : (
 											<span className="text-[11px] text-gray-9">
-												Not enabled
+												{hasDriveLocation
+													? bothConfigured
+														? "Not enabled"
+														: "Ready to enable"
+													: "Choose a folder to enable"}
 											</span>
 										)}
 									</div>
-									<div className="grid gap-1.5 sm:grid-cols-3">
-										<div className="flex items-center gap-2 rounded-md bg-gray-3 px-2.5 py-2 min-w-0">
-											<HardDriveIcon className="size-3.5 shrink-0 text-gray-9" />
-											<div className="min-w-0">
-												<p className="text-[10px] text-gray-9">Drive</p>
-												<p className="truncate text-[11px] font-medium text-gray-12">
-													{selectedDriveName}
-												</p>
-											</div>
+
+									<div className="flex items-center gap-3 rounded-md bg-gray-3 px-3 py-2.5">
+										<div className="flex items-center justify-center size-8 rounded-md bg-gray-1 shrink-0">
+											<FolderOpenIcon className="size-4 text-gray-10" />
 										</div>
-										<div className="flex items-center gap-2 rounded-md bg-gray-3 px-2.5 py-2 min-w-0">
-											<FolderOpenIcon className="size-3.5 shrink-0 text-gray-9" />
-											<div className="min-w-0">
-												<p className="text-[10px] text-gray-9">Folder</p>
-												<p className="truncate text-[11px] font-medium text-gray-12">
-													{selectedFolderName ?? "Select a folder"}
-												</p>
-											</div>
+										<div className="min-w-0 flex-1">
+											<p className="text-[10px] text-gray-9">Folder</p>
+											<p className="truncate text-[12px] font-medium text-gray-12">
+												{folderBreadcrumb}
+											</p>
 										</div>
-										<div className="flex items-center gap-2 rounded-md bg-gray-3 px-2.5 py-2 min-w-0">
-											<UserIcon className="size-3.5 shrink-0 text-gray-9" />
-											<div className="min-w-0">
-												<p className="text-[10px] text-gray-9">Member</p>
-												<p className="truncate text-[11px] font-medium text-gray-12">
-													User ID
-												</p>
-											</div>
-										</div>
-									</div>
-									<div className="flex items-center gap-2 rounded-md bg-gray-3 px-2.5 py-1.5 text-[11px] text-gray-10">
-										<VideoIcon className="size-3.5 shrink-0 text-gray-9" />
-										<span className="min-w-0 truncate">
-											{hasDriveLocation
-												? `${selectedFolderName ?? selectedDriveName} / user-id / video-id`
-												: "Select a folder before enabling"}
-										</span>
-									</div>
-									<div className="flex items-center gap-2 pt-1">
 										<Button
 											type="button"
 											size="xs"
@@ -647,34 +611,42 @@ export function OrganizationStorageIntegrations({
 											onClick={openFolderBrowser}
 											disabled={isPending || folderBrowserLoading}
 										>
-											<FolderOpenIcon className="size-3" />
-											Select Folder
-										</Button>
-										<Button
-											type="button"
-											size="xs"
-											variant="gray"
-											onClick={setDriveRootLocation}
-											disabled={isPending}
-										>
-											Use Root
-										</Button>
-										<Button
-											type="button"
-											size="xs"
-											onClick={() => setActiveProvider("googleDrive")}
-											disabled={!hasDriveLocation || isPending}
-										>
-											Enable
+											Change
 										</Button>
 									</div>
+
+									{hasDriveLocation && (
+										<div className="flex items-center gap-2 rounded-md bg-gray-3 px-3 py-2 text-[11px] text-gray-10">
+											<VideoIcon className="size-3.5 shrink-0 text-gray-9" />
+											<span className="text-gray-9">Recordings saved as</span>
+											<span className="min-w-0 truncate text-gray-12 font-medium">
+												{filePathPreview}
+											</span>
+										</div>
+									)}
+
+									{!driveIsActive && (
+										<div className="flex justify-end pt-0.5">
+											<Button
+												type="button"
+												size="xs"
+												onClick={() => setActiveProvider("googleDrive")}
+												disabled={!hasDriveLocation || isPending}
+											>
+												Enable
+											</Button>
+										</div>
+									)}
 								</div>
 
 								{folderBrowserOpen && (
 									<div className="flex flex-col gap-2 rounded-lg border border-gray-3 p-3">
-										<div className="flex items-center justify-between">
+										<div className="flex items-center justify-between gap-2">
 											<div className="min-w-0">
-												<p className="text-[12px] font-medium text-gray-12">
+												<p className="text-[10px] text-gray-9">
+													Browsing Google Drive
+												</p>
+												<p className="truncate text-[12px] font-medium text-gray-12">
 													{folderBrowserParent.name}
 												</p>
 											</div>
@@ -697,7 +669,7 @@ export function OrganizationStorageIntegrations({
 													onClick={selectCurrentDriveFolder}
 													disabled={folderBrowserLoading || isPending}
 												>
-													Use This Folder
+													Use this folder
 												</Button>
 											</div>
 										</div>
@@ -772,9 +744,10 @@ export function OrganizationStorageIntegrations({
 								</div>
 							</div>
 						) : (
-							<div className="flex items-center justify-between">
+							<div className="flex items-center justify-between gap-3">
 								<p className="text-[12px] text-gray-10">
-									Link your Google account to store uploads in Drive.
+									Link your Google account to store uploads in a "Cap" folder in
+									your Drive. You can change the location after connecting.
 								</p>
 								<Button
 									type="button"
