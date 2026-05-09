@@ -4,6 +4,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
+	generatePreviewGif,
 	generateThumbnail,
 	materializeMpdManifest,
 	normalizeVideoInputExtension,
@@ -87,6 +88,37 @@ describe("generateThumbnail integration tests", () => {
 		await expect(
 			generateThumbnail("/nonexistent/path/to/video.mp4", 10),
 		).rejects.toThrow();
+	});
+});
+
+describe("generatePreviewGif integration tests", () => {
+	test("generates small GIF preview from video", async () => {
+		const metadata = await probeVideo(`file://${TEST_VIDEO_WITH_AUDIO}`);
+		const preview = await generatePreviewGif(
+			TEST_VIDEO_WITH_AUDIO,
+			metadata.duration,
+			{ maxBytes: 100_000 },
+		);
+
+		try {
+			const previewData = readFileSync(preview.path);
+
+			expect(previewData.length).toBeGreaterThan(0);
+			expect(previewData.length).toBeLessThanOrEqual(100_000);
+			expect(previewData.subarray(0, 3).toString()).toBe("GIF");
+		} finally {
+			await preview.cleanup();
+		}
+	});
+
+	test("rejects GIF previews over the size budget", async () => {
+		const metadata = await probeVideo(`file://${TEST_VIDEO_WITH_AUDIO}`);
+
+		await expect(
+			generatePreviewGif(TEST_VIDEO_WITH_AUDIO, metadata.duration, {
+				maxBytes: 1,
+			}),
+		).rejects.toThrow("Preview GIF exceeds size budget");
 	});
 });
 
