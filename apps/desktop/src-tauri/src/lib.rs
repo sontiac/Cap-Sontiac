@@ -4780,10 +4780,9 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
         })
         .build(tauri_context)
         .expect("error while running tauri application")
-        .run(move |_handle, event| {
-            let handle = _handle.clone();
+        .run(move |handle, event| {
             let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                handle_run_event(&handle, event);
+                handle_run_event(handle, event);
             }));
 
             if let Err(panic) = result {
