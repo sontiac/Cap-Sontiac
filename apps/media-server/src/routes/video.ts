@@ -31,12 +31,14 @@ import {
 	getMaxConcurrentVideoProcesses,
 	getSystemResources,
 	sendWebhook,
+	touchJob,
 	updateJob,
 } from "../lib/job-manager";
 import type { TempFileHandle } from "../lib/temp-files";
 import { cleanupStaleTempFiles } from "../lib/temp-files";
 
 const video = new Hono();
+const PROCESSING_HEARTBEAT_MS = 60 * 1000;
 
 const probeSchema = z.object({
 	videoUrl: z.string().url(),
@@ -140,6 +142,33 @@ async function createVideoDownloadResponse(
 			"Content-Length": outputSize.toString(),
 		},
 	});
+}
+
+async function withJobHeartbeat<T>(
+	jobId: string,
+	operation: () => Promise<T>,
+): Promise<T> {
+	const interval = setInterval(() => {
+		const job = getJob(jobId);
+		if (
+			!job ||
+			job.phase === "complete" ||
+			job.phase === "error" ||
+			job.phase === "cancelled"
+		) {
+			clearInterval(interval);
+			return;
+		}
+
+		touchJob(jobId);
+	}, PROCESSING_HEARTBEAT_MS);
+	interval.unref?.();
+
+	try {
+		return await operation();
+	} finally {
+		clearInterval(interval);
+	}
 }
 
 video.get("/status", (c) => {
@@ -583,27 +612,7 @@ async function processWithResilientRetry(
 		}
 	};
 
-	try {
-		const outputFile = await processVideo(
-			inputPath,
-			metadata,
-			processOptions,
-			onProgress,
-			abortSignal,
-		);
-		return { outputFile, lastResortRepairFile: null };
-	} catch (firstError) {
-		if (!isWebm) throw firstError;
-
-		console.warn(
-			`[processWithResilientRetry] First transcode attempt failed: ${firstError instanceof Error ? firstError.message : String(firstError)}`,
-		);
-
-		updateJob(jobId, {
-			progress: 10,
-			message: "Retrying with error recovery...",
-		});
-
+	return await withJobHeartbeat(jobId, async () => {
 		try {
 			const outputFile = await processVideo(
 				inputPath,
@@ -611,55 +620,77 @@ async function processWithResilientRetry(
 				processOptions,
 				onProgress,
 				abortSignal,
-				RESILIENT_FLAGS,
 			);
 			return { outputFile, lastResortRepairFile: null };
-		} catch (retryError) {
+		} catch (firstError) {
+			if (!isWebm) throw firstError;
+
 			console.warn(
-				`[processWithResilientRetry] Resilient retry also failed: ${retryError instanceof Error ? retryError.message : String(retryError)}`,
-			);
-		}
-
-		console.log(
-			"[processWithResilientRetry] Attempting last-resort container repair and transcode...",
-		);
-
-		updateJob(jobId, {
-			progress: 10,
-			message: "Attempting full repair...",
-		});
-
-		let lastResortRepairFile: TempFileHandle | null = null;
-		try {
-			lastResortRepairFile = await repairContainer(
-				originalInputPath,
-				abortSignal,
+				`[processWithResilientRetry] First transcode attempt failed: ${firstError instanceof Error ? firstError.message : String(firstError)}`,
 			);
 
-			let repairedMetadata: VideoMetadata;
+			updateJob(jobId, {
+				progress: 10,
+				message: "Retrying with error recovery...",
+			});
+
 			try {
-				repairedMetadata = await probeVideoFile(lastResortRepairFile.path);
-			} catch {
-				repairedMetadata = metadata;
+				const outputFile = await processVideo(
+					inputPath,
+					metadata,
+					processOptions,
+					onProgress,
+					abortSignal,
+					RESILIENT_FLAGS,
+				);
+				return { outputFile, lastResortRepairFile: null };
+			} catch (retryError) {
+				console.warn(
+					`[processWithResilientRetry] Resilient retry also failed: ${retryError instanceof Error ? retryError.message : String(retryError)}`,
+				);
 			}
 
-			const outputFile = await processVideo(
-				lastResortRepairFile.path,
-				repairedMetadata,
-				processOptions,
-				onProgress,
-				abortSignal,
-				RESILIENT_FLAGS,
+			console.log(
+				"[processWithResilientRetry] Attempting last-resort container repair and transcode...",
 			);
-			return { outputFile, lastResortRepairFile };
-		} catch (lastResortError) {
-			console.error(
-				`[processWithResilientRetry] Last-resort repair+transcode failed: ${lastResortError instanceof Error ? lastResortError.message : String(lastResortError)}`,
-			);
-			await lastResortRepairFile?.cleanup();
-			throw lastResortError;
+
+			updateJob(jobId, {
+				progress: 10,
+				message: "Attempting full repair...",
+			});
+
+			let lastResortRepairFile: TempFileHandle | null = null;
+			try {
+				lastResortRepairFile = await repairContainer(
+					originalInputPath,
+					abortSignal,
+				);
+
+				let repairedMetadata: VideoMetadata;
+				try {
+					repairedMetadata = await probeVideoFile(lastResortRepairFile.path);
+				} catch {
+					repairedMetadata = metadata;
+				}
+
+				const outputFile = await processVideo(
+					lastResortRepairFile.path,
+					repairedMetadata,
+					processOptions,
+					onProgress,
+					abortSignal,
+					RESILIENT_FLAGS,
+				);
+				return { outputFile, lastResortRepairFile };
+			} catch (lastResortError) {
+				console.error(
+					`[processWithResilientRetry] Last-resort repair+transcode failed: ${lastResortError instanceof Error ? lastResortError.message : String(lastResortError)}`,
+				);
+				await lastResortRepairFile?.cleanup();
+				throw lastResortError;
+			}
 		}
-	}
+	});
 }
 
 async function processVideoAsync(
