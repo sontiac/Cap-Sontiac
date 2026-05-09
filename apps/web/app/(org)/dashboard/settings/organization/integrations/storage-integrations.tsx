@@ -275,7 +275,7 @@ export function OrganizationStorageIntegrations({
 				<InfoIcon className="size-3.5 text-gray-9 shrink-0" />
 				<p className="text-[12px] text-gray-9">
 					Storage applies to all members of {settings.organization.name}. Only
-					owners and admins can manage integrations.
+					owners can manage integrations.
 				</p>
 			</div>
 
@@ -368,7 +368,9 @@ export function OrganizationStorageIntegrations({
 									id={accessKeyId}
 									type="password"
 									value={s3Config.accessKeyId}
-									placeholder="PL31OADSQNK"
+									placeholder={
+										settings.s3?.configured ? "Stored securely" : "PL31OADSQNK"
+									}
 									autoComplete="off"
 									onChange={(event) =>
 										setS3Config((current) => ({
@@ -386,7 +388,9 @@ export function OrganizationStorageIntegrations({
 									id={secretKeyId}
 									type="password"
 									value={s3Config.secretAccessKey}
-									placeholder="PL31OADSQNK"
+									placeholder={
+										settings.s3?.configured ? "Stored securely" : "PL31OADSQNK"
+									}
 									autoComplete="off"
 									onChange={(event) =>
 										setS3Config((current) => ({

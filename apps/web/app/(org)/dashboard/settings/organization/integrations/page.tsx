@@ -21,7 +21,17 @@ export default async function OrganizationIntegrationsPage() {
 
 	const settings = await getOrganizationStorageSettings(
 		user.activeOrganizationId,
-	);
+	).catch((error: unknown) => {
+		if (
+			error instanceof Error &&
+			(error.message === "Only the owner can manage organization storage" ||
+				error.message === "Organization not found")
+		) {
+			redirect("/dashboard/caps");
+		}
+
+		throw error;
+	});
 
 	return <OrganizationStorageIntegrations initialSettings={settings} />;
 }

@@ -22,7 +22,7 @@ import {
 	getGoogleDriveUserEmail,
 } from "@cap/web-backend";
 import { type Organisation, S3Bucket, Storage } from "@cap/web-domain";
-import { and, desc, eq } from "drizzle-orm";
+import { and, desc, eq, isNull } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { runPromise } from "@/lib/server";
 
@@ -95,7 +95,12 @@ const requireOrganizationOwner = async (
 			ownerId: organizations.ownerId,
 		})
 		.from(organizations)
-		.where(eq(organizations.id, organizationId))
+		.where(
+			and(
+				eq(organizations.id, organizationId),
+				isNull(organizations.tombstoneAt),
+			),
+		)
 		.limit(1);
 
 	if (!organization) throw new Error("Organization not found");
@@ -106,11 +111,14 @@ const requireOrganizationOwner = async (
 	return { user, organization };
 };
 
-const decryptS3Config = async (bucket: typeof s3Buckets.$inferSelect) => ({
+const decryptS3Config = async (
+	bucket: typeof s3Buckets.$inferSelect,
+	exposeSecrets: boolean,
+) => ({
 	configured: true,
 	provider: bucket.provider,
-	accessKeyId: await decrypt(bucket.accessKeyId),
-	secretAccessKey: await decrypt(bucket.secretAccessKey),
+	accessKeyId: exposeSecrets ? await decrypt(bucket.accessKeyId) : "",
+	secretAccessKey: exposeSecrets ? await decrypt(bucket.secretAccessKey) : "",
 	endpoint: bucket.endpoint
 		? await decrypt(bucket.endpoint)
 		: "https://s3.amazonaws.com",
@@ -226,6 +234,34 @@ const getOrganizationBucket = async (
 	return bucket ?? null;
 };
 
+const getS3InputCredentials = async (input: S3ConfigInput) => {
+	const hasAccessKeyId = input.accessKeyId.trim().length > 0;
+	const hasSecretAccessKey = input.secretAccessKey.trim().length > 0;
+
+	if (hasAccessKeyId && hasSecretAccessKey) {
+		return {
+			accessKeyId: input.accessKeyId,
+			secretAccessKey: input.secretAccessKey,
+		};
+	}
+
+	const existingBucket = await getOrganizationBucket(input.organizationId);
+	if (!existingBucket) {
+		throw new Error("Access key ID and secret access key are required");
+	}
+
+	if (hasAccessKeyId || hasSecretAccessKey) {
+		throw new Error(
+			"Enter both access key ID and secret access key to change credentials",
+		);
+	}
+
+	return {
+		accessKeyId: await decrypt(existingBucket.accessKeyId),
+		secretAccessKey: await decrypt(existingBucket.secretAccessKey),
+	};
+};
+
 const revalidateStorageSettings = () => {
 	revalidatePath(settingsPath);
 	revalidatePath("/dashboard/settings/organization");
@@ -272,7 +308,7 @@ export async function getOrganizationStorageSettings(
 		activeProvider,
 		googleOAuthClientId: process.env.GOOGLE_CLIENT_ID ?? null,
 		googlePickerApiKey: process.env.NEXT_PUBLIC_GOOGLE_PICKER_API_KEY ?? null,
-		s3: bucket ? await decryptS3Config(bucket) : null,
+		s3: bucket ? await decryptS3Config(bucket, false) : null,
 		googleDrive:
 			drive && driveConfig
 				? {
@@ -293,10 +329,11 @@ export async function getOrganizationStorageSettings(
 
 export async function saveOrganizationS3Config(input: S3ConfigInput) {
 	const { user } = await requireOrganizationOwner(input.organizationId);
+	const credentials = await getS3InputCredentials(input);
 	const encryptedConfig = {
 		provider: input.provider,
-		accessKeyId: await encrypt(input.accessKeyId),
-		secretAccessKey: await encrypt(input.secretAccessKey),
+		accessKeyId: await encrypt(credentials.accessKeyId),
+		secretAccessKey: await encrypt(credentials.secretAccessKey),
 		endpoint: input.endpoint ? await encrypt(input.endpoint) : null,
 		bucketName: await encrypt(input.bucketName),
 		region: await encrypt(input.region),
@@ -334,14 +371,15 @@ export async function removeOrganizationS3Config(
 
 export async function testOrganizationS3Config(input: S3ConfigInput) {
 	await requireOrganizationOwner(input.organizationId);
+	const credentials = await getS3InputCredentials(input);
 	const controller = new AbortController();
 	const timeoutId = setTimeout(() => controller.abort(), 5000);
 	const s3Client = new S3Client({
 		endpoint: input.endpoint || undefined,
 		region: input.region,
 		credentials: {
-			accessKeyId: input.accessKeyId,
-			secretAccessKey: input.secretAccessKey,
+			accessKeyId: credentials.accessKeyId,
+			secretAccessKey: credentials.secretAccessKey,
 		},
 	});
 
