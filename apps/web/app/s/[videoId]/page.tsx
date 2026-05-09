@@ -42,6 +42,10 @@ import {
 import { createNotification } from "@/lib/Notification";
 import * as EffectRuntime from "@/lib/server";
 import { runPromise } from "@/lib/server";
+import {
+	isSocialCrawlerUserAgent,
+	SOCIAL_REFERRER_DOMAINS,
+} from "@/lib/social-crawlers";
 import { transcribeVideo } from "@/lib/transcribe";
 import { optionFromTOrFirst } from "@/utils/effect";
 import { isAiGenerationEnabled } from "@/utils/flags";
@@ -106,16 +110,6 @@ async function getSharedSpacesForVideo(videoId: Video.VideoId) {
 	return sharedSpaces;
 }
 
-const ALLOWED_REFERRERS = [
-	"x.com",
-	"twitter.com",
-	"facebook.com",
-	"fb.com",
-	"slack.com",
-	"notion.so",
-	"linkedin.com",
-];
-
 function PolicyDeniedView({ reason }: { reason?: string }) {
 	let title = "This video is private";
 	let description: React.ReactNode = (
@@ -166,10 +160,15 @@ export async function generateMetadata(
 	const params = await props.params;
 	const videoId = params.videoId as Video.VideoId;
 
-	const referrer = (await headers()).get("x-referrer") || "";
-	const isAllowedReferrer = ALLOWED_REFERRERS.some((domain) =>
+	const headersList = await headers();
+	const referrer =
+		headersList.get("x-referrer") || headersList.get("referer") || "";
+	const requestUserAgent = headersList.get("user-agent") || "";
+	const isAllowedReferrer = SOCIAL_REFERRER_DOMAINS.some((domain) =>
 		referrer.includes(domain),
 	);
+	const canRenderSocialPreview =
+		isAllowedReferrer || isSocialCrawlerUserAgent(requestUserAgent);
 
 	return Effect.flatMap(Videos, (v) => v.getByIdForViewing(videoId)).pipe(
 		Effect.map(
@@ -178,6 +177,10 @@ export async function generateMetadata(
 				onSome: ([video]) => {
 					const previewImageUrl = new URL(
 						`/api/video/preview?videoId=${videoId}&fallback=og`,
+						buildEnv.NEXT_PUBLIC_WEB_URL,
+					).toString();
+					const ogImageUrl = new URL(
+						`/api/video/og?videoId=${videoId}`,
 						buildEnv.NEXT_PUBLIC_WEB_URL,
 					).toString();
 					const playlistUrl = new URL(
@@ -189,7 +192,19 @@ export async function generateMetadata(
 						title: `${video.name} | Cap Recording`,
 						description: "Watch this video on Cap",
 						openGraph: {
-							images: [{ url: previewImageUrl }],
+							images: [
+								{
+									url: previewImageUrl,
+									width: 480,
+									height: 270,
+									type: "image/gif",
+								},
+								{
+									url: ogImageUrl,
+									width: 1200,
+									height: 630,
+								},
+							],
 							videos: [
 								{
 									url: playlistUrl,
@@ -226,7 +241,9 @@ export async function generateMetadata(
 								height: 720,
 							},
 						},
-						robots: isAllowedReferrer ? "index, follow" : "noindex, nofollow",
+						robots: canRenderSocialPreview
+							? "index, follow"
+							: "noindex, nofollow",
 					};
 				},
 			}),
