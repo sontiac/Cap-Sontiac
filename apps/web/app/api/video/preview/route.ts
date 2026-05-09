@@ -20,7 +20,7 @@ function getFallbackResponse(request: NextRequest, videoId: string) {
 	const fallbackUrl = new URL("/api/video/og", request.url);
 	fallbackUrl.searchParams.set("videoId", videoId);
 	const response = NextResponse.redirect(fallbackUrl, 302);
-	response.headers.set("Cache-Control", "public, max-age=300");
+	response.headers.set("Cache-Control", "private, no-store, max-age=0");
 	return response;
 }
 

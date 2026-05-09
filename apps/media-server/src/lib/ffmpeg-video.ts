@@ -113,18 +113,8 @@ function getPreviewGifOptions(
 		colors: Math.round(
 			Math.min(DEFAULT_PREVIEW_GIF_OPTIONS.colors, Math.max(2, opts.colors)),
 		),
-		maxBytes: Math.round(
-			Math.min(
-				DEFAULT_PREVIEW_GIF_OPTIONS.maxBytes,
-				Math.max(1, opts.maxBytes),
-			),
-		),
-		timeoutMs: Math.round(
-			Math.min(
-				DEFAULT_PREVIEW_GIF_OPTIONS.timeoutMs,
-				Math.max(5_000, opts.timeoutMs),
-			),
-		),
+		maxBytes: Math.round(Math.max(1, opts.maxBytes)),
+		timeoutMs: Math.round(Math.max(5_000, opts.timeoutMs)),
 	};
 }
 
@@ -1191,6 +1181,10 @@ async function runPreviewGifAttempt(
 	attempt: PreviewGifAttempt,
 	abortSignal?: AbortSignal,
 ): Promise<void> {
+	if (abortSignal?.aborted) {
+		throw new Error("Preview GIF generation aborted");
+	}
+
 	const ffmpegArgs = [
 		"ffmpeg",
 		"-threads",
@@ -1271,6 +1265,10 @@ export async function generatePreviewGif(
 	let lastError: unknown;
 
 	for (const [index, attempt] of attempts.entries()) {
+		if (abortSignal?.aborted) {
+			throw new Error("Preview GIF generation aborted");
+		}
+
 		const outputTempFile = await createTempFile(".gif");
 
 		try {
@@ -1295,8 +1293,13 @@ export async function generatePreviewGif(
 				`Preview GIF exceeds size budget: ${outputSize} bytes > ${opts.maxBytes} bytes`,
 			);
 		} catch (err) {
-			lastError = err;
 			await outputTempFile.cleanup();
+			if (abortSignal?.aborted) {
+				throw err instanceof Error
+					? err
+					: new Error("Preview GIF generation aborted");
+			}
+			lastError = err;
 			if (index === attempts.length - 1) {
 				throw err;
 			}

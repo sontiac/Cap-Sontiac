@@ -1264,6 +1264,8 @@ async function muxSegmentsAsync(
 		"cap-media-server",
 		`mux-${jobId}`,
 	);
+	const abortController = new AbortController();
+	updateJob(jobId, { abortController });
 
 	try {
 		await ensureTempDir();
@@ -1434,7 +1436,7 @@ async function muxSegmentsAsync(
 			resultPath,
 			metadata?.duration ?? 0,
 			previewGifPresignedUrl,
-			undefined,
+			abortController.signal,
 			"mux-segments",
 		);
 

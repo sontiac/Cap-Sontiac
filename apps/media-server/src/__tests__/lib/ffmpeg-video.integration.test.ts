@@ -120,6 +120,15 @@ describe("generatePreviewGif integration tests", () => {
 			}),
 		).rejects.toThrow("Preview GIF exceeds size budget");
 	});
+
+	test("rejects before spawning when already aborted", async () => {
+		const controller = new AbortController();
+		controller.abort();
+
+		await expect(
+			generatePreviewGif(TEST_VIDEO_WITH_AUDIO, 10, {}, controller.signal),
+		).rejects.toThrow("Preview GIF generation aborted");
+	});
 });
 
 describe("processVideo integration tests", () => {
