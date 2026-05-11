@@ -21,6 +21,7 @@ import {
 import { MaskOverlay } from "./MaskOverlay";
 import { PerformanceOverlay } from "./PerformanceOverlay";
 import { TextOverlay } from "./TextOverlay";
+import { splitClipSegmentAt } from "./timeline-utils";
 import {
 	EditorButton,
 	MenuItem,
@@ -310,6 +311,50 @@ export function PlayerContent() {
 				}
 
 				await handlePlayPauseClick();
+			},
+		},
+		{
+			combo: "A",
+			handler: async () => {
+				if (editorState.playing) {
+					await commands.stopPlayback();
+					setEditorState("playing", false);
+				}
+				const current = editorState.previewTime ?? editorState.playbackTime;
+				const next = Math.max(0, current - 1 / FPS);
+				setEditorState("playbackTime", next);
+				setEditorState("previewTime", null);
+				await commands.seekTo(Math.floor(next * FPS));
+			},
+		},
+		{
+			combo: "D",
+			handler: async () => {
+				if (editorState.playing) {
+					await commands.stopPlayback();
+					setEditorState("playing", false);
+				}
+				const current = editorState.previewTime ?? editorState.playbackTime;
+				const next = Math.min(totalDuration(), current + 1 / FPS);
+				setEditorState("playbackTime", next);
+				setEditorState("previewTime", null);
+				await commands.seekTo(Math.floor(next * FPS));
+			},
+		},
+		{
+			combo: "C",
+			handler: async () => {
+				if (!project.timeline) return;
+				const time = editorState.previewTime ?? editorState.playbackTime;
+				const newSegments = [...project.timeline.segments];
+				const didSplit = splitClipSegmentAt(newSegments, time);
+				if (!didSplit) return;
+				const updated = {
+					...project,
+					timeline: { ...project.timeline, segments: newSegments },
+				};
+				setProject(updated);
+				await commands.setProjectConfig(serializeProjectConfiguration(updated));
 			},
 		},
 	]);

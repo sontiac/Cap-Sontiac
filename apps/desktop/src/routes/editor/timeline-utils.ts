@@ -151,3 +151,90 @@ export function rippleDeleteAllTracks(
 	if (timeline.keyboardSegments)
 		rippleDeleteFromTrack(timeline.keyboardSegments, cutStart, cutEnd);
 }
+
+export function splitClipSegmentAt(
+	segments: Array<{ start: number; end: number; timescale: number }>,
+	editedTime: number,
+) {
+	let editedOffset = 0;
+	for (let i = 0; i < segments.length; i++) {
+		const seg = segments[i];
+		const duration = (seg.end - seg.start) / seg.timescale;
+		const segEditedEnd = editedOffset + duration;
+
+		if (
+			editedTime > editedOffset + 0.001 &&
+			editedTime < segEditedEnd - 0.001
+		) {
+			const splitSourceTime =
+				seg.start + (editedTime - editedOffset) * seg.timescale;
+			segments.splice(
+				i,
+				1,
+				{ ...seg, end: splitSourceTime },
+				{ ...seg, start: splitSourceTime },
+			);
+			return true;
+		}
+
+		editedOffset += duration;
+	}
+	return false;
+}
+
+if (import.meta.vitest) {
+	const { describe, expect, it } = import.meta.vitest;
+
+	describe("splitClipSegmentAt", () => {
+		it("splits a single segment at the playhead into two", () => {
+			const segments = [{ start: 0, end: 10, timescale: 1 }];
+			const result = splitClipSegmentAt(segments, 4);
+			expect(result).toBe(true);
+			expect(segments).toEqual([
+				{ start: 0, end: 4, timescale: 1 },
+				{ start: 4, end: 10, timescale: 1 },
+			]);
+		});
+
+		it("does nothing when playhead is at a segment boundary", () => {
+			const segments = [
+				{ start: 0, end: 5, timescale: 1 },
+				{ start: 5, end: 10, timescale: 1 },
+			];
+			const result = splitClipSegmentAt(segments, 5);
+			expect(result).toBe(false);
+			expect(segments.length).toBe(2);
+		});
+
+		it("does nothing when playhead is outside all segments", () => {
+			const segments = [{ start: 0, end: 5, timescale: 1 }];
+			const result = splitClipSegmentAt(segments, 12);
+			expect(result).toBe(false);
+			expect(segments).toEqual([{ start: 0, end: 5, timescale: 1 }]);
+		});
+
+		it("respects timescale when computing the split point", () => {
+			const segments = [{ start: 0, end: 10, timescale: 2 }];
+			const result = splitClipSegmentAt(segments, 2);
+			expect(result).toBe(true);
+			expect(segments).toEqual([
+				{ start: 0, end: 4, timescale: 2 },
+				{ start: 4, end: 10, timescale: 2 },
+			]);
+		});
+
+		it("splits the correct segment when multiple exist", () => {
+			const segments = [
+				{ start: 0, end: 5, timescale: 1 },
+				{ start: 0, end: 10, timescale: 1 },
+			];
+			const result = splitClipSegmentAt(segments, 8);
+			expect(result).toBe(true);
+			expect(segments).toEqual([
+				{ start: 0, end: 5, timescale: 1 },
+				{ start: 0, end: 3, timescale: 1 },
+				{ start: 3, end: 10, timescale: 1 },
+			]);
+		});
+	});
+}
