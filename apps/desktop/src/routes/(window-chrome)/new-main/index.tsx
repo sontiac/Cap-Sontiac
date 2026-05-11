@@ -107,6 +107,55 @@ const findCamera = (cameras: CameraWithDetails[], id: DeviceOrModelID) => {
 	});
 };
 
+const VIDEO_FILE_EXTENSIONS = [
+	"mp4",
+	"mov",
+	"avi",
+	"mkv",
+	"webm",
+	"wmv",
+	"m4v",
+	"flv",
+] as const;
+
+const VIDEO_FILE_EXTENSION_PATTERN = new RegExp(
+	`\\.(${VIDEO_FILE_EXTENSIONS.join("|")})$`,
+	"i",
+);
+
+function isVideoFilePath(path: string): boolean {
+	return VIDEO_FILE_EXTENSION_PATTERN.test(path);
+}
+
+async function importVideoFromPath(sourcePath: string) {
+	try {
+		const projectPath = await commands.startVideoImport(sourcePath);
+		await commands.showWindow({ Editor: { project_path: projectPath } });
+		getCurrentWindow().hide();
+	} catch (e) {
+		console.error("Failed to import video:", e);
+		await dialog.message(
+			`Failed to import video: ${e instanceof Error ? e.message : String(e)}`,
+			{ title: "Import Error", kind: "error" },
+		);
+	}
+}
+
+async function pickAndImportVideo() {
+	const result = await dialog.open({
+		filters: [
+			{
+				name: "Video Files",
+				extensions: [...VIDEO_FILE_EXTENSIONS],
+			},
+		],
+		multiple: false,
+	});
+
+	if (typeof result !== "string") return;
+	await importVideoFromPath(result);
+}
+
 type WindowListItem = Pick<
 	CaptureWindow,
 	"id" | "owner_name" | "name" | "bounds" | "refresh_rate"
@@ -1116,32 +1165,6 @@ function TargetMenuPanel(props: TargetMenuPanelProps & SharedTargetMenuProps) {
 							? "No matching cameras"
 							: "No matching microphones";
 
-	const handleImport = async () => {
-		const result = await dialog.open({
-			filters: [
-				{
-					name: "Video Files",
-					extensions: ["mp4", "mov", "avi", "mkv", "webm", "wmv", "m4v", "flv"],
-				},
-			],
-			multiple: false,
-		});
-
-		if (result) {
-			try {
-				const projectPath = await commands.startVideoImport(result as string);
-				await commands.showWindow({ Editor: { project_path: projectPath } });
-				getCurrentWindow().hide();
-			} catch (e) {
-				console.error("Failed to import video:", e);
-				await dialog.message(
-					`Failed to import video: ${e instanceof Error ? e.message : String(e)}`,
-					{ title: "Import Error", kind: "error" },
-				);
-			}
-		}
-	};
-
 	const filteredDisplayTargets = createMemo<CaptureDisplayWithThumbnail[]>(
 		() => {
 			if (props.variant !== "display") return [];
@@ -1324,7 +1347,7 @@ function TargetMenuPanel(props: TargetMenuPanelProps & SharedTargetMenuProps) {
 							variant="gray"
 							size="sm"
 							class="h-[36px] px-3 shrink-0 flex items-center gap-1.5"
-							onClick={handleImport}
+							onClick={pickAndImportVideo}
 						>
 							<IconLucideImport class="size-3.5" />
 							<span>Import</span>
@@ -2380,10 +2403,28 @@ function Page() {
 						/>
 					</div>
 				</div>
+				<Button
+					variant="gray"
+					disabled={isRecording()}
+					onClick={pickAndImportVideo}
+					class="flex items-center justify-center gap-2 w-full h-[44px]"
+				>
+					<IconLucideImport class="size-4" />
+					Import video
+				</Button>
 				<BaseControls />
 			</div>
 		</Transition>
 	);
+
+	const dragDropCleanup = getCurrentWindow().onDragDropEvent(async (event) => {
+		if (event.payload.type !== "drop") return;
+		if (isRecording()) return;
+		const videoPath = event.payload.paths.find(isVideoFilePath);
+		if (!videoPath) return;
+		await importVideoFromPath(videoPath);
+	});
+	onCleanup(() => dragDropCleanup.then((cb) => cb()));
 
 	const startSignInCleanup = listen("start-sign-in", async () => {
 		const abort = new AbortController();
