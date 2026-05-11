@@ -133,6 +133,43 @@ const LANGUAGE_OPTIONS: LanguageOption[] = [
 	{ code: "ta", label: "Tamil" },
 ];
 
+const CAPTION_STYLE_PRESETS = {
+	default: {
+		font: "System Sans-Serif",
+		size: 50,
+		color: "#FFFFFF",
+		backgroundColor: "#000000",
+		backgroundOpacity: 95,
+		position: "bottom-center",
+		italic: false,
+		fontWeight: 400,
+		outline: false,
+		outlineColor: "#000000",
+		highlightColor: "#FFFFFF",
+		fadeDuration: 0.2,
+		lingerDuration: 0.4,
+		wordTransitionDuration: 0.25,
+		activeWordHighlight: false,
+	},
+	tiktok: {
+		font: "System Sans-Serif",
+		size: 72,
+		color: "#FFFFFF",
+		backgroundColor: "#000000",
+		backgroundOpacity: 0,
+		position: "bottom-center",
+		italic: false,
+		fontWeight: 900,
+		outline: true,
+		outlineColor: "#000000",
+		highlightColor: "#FFFF00",
+		fadeDuration: 0.05,
+		lingerDuration: 0.2,
+		wordTransitionDuration: 0.1,
+		activeWordHighlight: true,
+	},
+} as const satisfies Record<string, Partial<CaptionSettings>>;
+
 export function CaptionsTab(props: {
 	brandColorSwatches: OrganizationBrandColorSwatch[];
 }) {
@@ -190,6 +227,18 @@ export function CaptionsTab(props: {
 		if (!project?.captions) return;
 
 		setProject("captions", "settings", key, value);
+	};
+
+	const applyCaptionStylePreset = (preset: Partial<CaptionSettings>) => {
+		if (!project?.captions) return;
+		for (const [key, value] of Object.entries(preset)) {
+			setProject(
+				"captions",
+				"settings",
+				key as keyof CaptionSettings,
+				value as never,
+			);
+		}
 	};
 
 	const [selectedModel, setSelectedModel] = createSignal(
@@ -676,6 +725,33 @@ export function CaptionsTab(props: {
 							!hasCaptions() && "opacity-50 pointer-events-none",
 						)}
 					>
+						<Field name="Style Preset" icon={<IconCapMessageBubble />}>
+							<div class="flex gap-2">
+								<Button
+									variant="gray"
+									size="sm"
+									disabled={!hasCaptions()}
+									onClick={() =>
+										applyCaptionStylePreset(CAPTION_STYLE_PRESETS.default)
+									}
+									class="flex-1"
+								>
+									Default
+								</Button>
+								<Button
+									variant="primary"
+									size="sm"
+									disabled={!hasCaptions()}
+									onClick={() =>
+										applyCaptionStylePreset(CAPTION_STYLE_PRESETS.tiktok)
+									}
+									class="flex-1"
+								>
+									TikTok
+								</Button>
+							</div>
+						</Field>
+
 						<Field name="Font Settings" icon={<IconCapMessageBubble />}>
 							<div class="space-y-3">
 								<div class="flex flex-col gap-2">
