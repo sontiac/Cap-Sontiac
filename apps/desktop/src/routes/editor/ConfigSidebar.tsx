@@ -68,6 +68,7 @@ import IconLucideGrid from "~icons/lucide/grid";
 import IconLucideKeyboard from "~icons/lucide/keyboard";
 import IconLucideMonitor from "~icons/lucide/monitor";
 import IconLucideMoon from "~icons/lucide/moon";
+import IconLucideMusic from "~icons/lucide/music";
 import IconLucidePalette from "~icons/lucide/palette";
 import IconLucideRabbit from "~icons/lucide/rabbit";
 import IconLucideSparkles from "~icons/lucide/sparkles";
@@ -83,6 +84,7 @@ import { GradientEditor } from "./GradientEditor";
 import { KeyboardTab } from "./KeyboardTab";
 import { evaluateMask, type MaskKind, type MaskSegment } from "./masks";
 import { DEFAULT_GRADIENT_FROM, DEFAULT_GRADIENT_TO } from "./projectConfig";
+import { SfxTab } from "./SfxTab";
 import ShadowSettings from "./ShadowSettings";
 import { TextInput } from "./TextInput";
 import type { TextSegment } from "./text";
@@ -330,6 +332,7 @@ const TAB_IDS = {
 	keyboard: "keyboard",
 	hotkeys: "hotkeys",
 	captions: "captions",
+	sfx: "sfx",
 } as const;
 
 export function ConfigSidebar() {
@@ -399,7 +402,8 @@ export function ConfigSidebar() {
 			| "cursor"
 			| "keyboard"
 			| "hotkeys"
-			| "captions",
+			| "captions"
+			| "sfx",
 	});
 
 	let scrollRef!: HTMLDivElement;
@@ -433,6 +437,10 @@ export function ConfigSidebar() {
 						{
 							id: TAB_IDS.captions,
 							icon: IconCapMessageBubble,
+						},
+						{
+							id: TAB_IDS.sfx,
+							icon: IconLucideMusic,
 						},
 						// { id: "hotkeys" as const, icon: IconCapHotkeys },
 					].filter(Boolean)}
@@ -867,6 +875,12 @@ export function ConfigSidebar() {
 					class="flex flex-col flex-1 gap-6 p-4 min-h-0"
 				>
 					<KeyboardTab brandColorSwatches={brandColorSwatches()} />
+				</KTabs.Content>
+				<KTabs.Content
+					value={TAB_IDS.sfx}
+					class="flex flex-col flex-1 gap-6 p-4 min-h-0"
+				>
+					<SfxTab />
 				</KTabs.Content>
 			</div>
 			<div

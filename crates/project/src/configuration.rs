@@ -835,6 +835,23 @@ pub struct SceneSegment {
 
 #[derive(Type, Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
+pub struct SfxSegment {
+    pub id: String,
+    pub start: f64,
+    pub end: f64,
+    pub file_path: String,
+    #[serde(default = "SfxSegment::default_volume")]
+    pub volume: f32,
+}
+
+impl SfxSegment {
+    fn default_volume() -> f32 {
+        1.0
+    }
+}
+
+#[derive(Type, Serialize, Deserialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
 pub struct TimelineConfiguration {
     pub segments: Vec<TimelineSegment>,
     pub zoom_segments: Vec<ZoomSegment>,
@@ -848,6 +865,8 @@ pub struct TimelineConfiguration {
     pub caption_segments: Vec<CaptionTrackSegment>,
     #[serde(default)]
     pub keyboard_segments: Vec<crate::KeyboardTrackSegment>,
+    #[serde(default)]
+    pub sfx_segments: Vec<SfxSegment>,
 }
 
 #[derive(Type, Serialize, Deserialize, Clone, Debug)]
