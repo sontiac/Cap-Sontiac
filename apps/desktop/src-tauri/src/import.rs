@@ -41,6 +41,62 @@ pub struct VideoImportProgress {
     pub message: String,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum VideoRotation {
+    None,
+    Cw90,
+    Half,
+    Ccw90,
+}
+
+fn rotation_from_clockwise_degrees(deg: i32) -> VideoRotation {
+    match deg.rem_euclid(360) {
+        90 => VideoRotation::Cw90,
+        180 => VideoRotation::Half,
+        270 => VideoRotation::Ccw90,
+        _ => VideoRotation::None,
+    }
+}
+
+fn read_video_rotation(input: &avformat::context::Input) -> VideoRotation {
+    let Some(stream) = input.streams().best(ffmpeg::media::Type::Video) else {
+        return VideoRotation::None;
+    };
+
+    if let Some(rotate_str) = stream.metadata().get("rotate")
+        && let Ok(deg) = rotate_str.parse::<i32>()
+    {
+        let rotation = rotation_from_clockwise_degrees(deg);
+        if rotation != VideoRotation::None {
+            return rotation;
+        }
+    }
+
+    for side_data in stream.side_data() {
+        if side_data.kind() != ffmpeg::codec::packet::side_data::Type::DisplayMatrix {
+            continue;
+        }
+        let bytes = side_data.data();
+        if bytes.len() < std::mem::size_of::<[i32; 9]>() {
+            continue;
+        }
+        let mut matrix = [0i32; 9];
+        unsafe {
+            std::ptr::copy_nonoverlapping(
+                bytes.as_ptr(),
+                matrix.as_mut_ptr() as *mut u8,
+                std::mem::size_of::<[i32; 9]>(),
+            );
+        }
+        let ccw_angle = unsafe { ffmpeg::ffi::av_display_rotation_get(matrix.as_ptr()) };
+        if ccw_angle.is_finite() {
+            return rotation_from_clockwise_degrees(-ccw_angle.round() as i32);
+        }
+    }
+
+    VideoRotation::None
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum ImportError {
     #[error("Failed to open video file: {0}")]
@@ -153,6 +209,196 @@ fn get_audio_stream_info(input: &avformat::context::Input) -> Option<(usize, Aud
     Some((stream_index, audio_info))
 }
 
+fn transpose_plane(
+    src: &[u8],
+    src_stride: usize,
+    src_w: usize,
+    src_h: usize,
+    dst: &mut [u8],
+    dst_stride: usize,
+    dst_w: usize,
+    dst_h: usize,
+    rotation: VideoRotation,
+) {
+    match rotation {
+        VideoRotation::Cw90 => {
+            for row in 0..dst_h {
+                for col in 0..dst_w {
+                    let src_r = src_h - 1 - col;
+                    let src_c = row;
+                    dst[row * dst_stride + col] = src[src_r * src_stride + src_c];
+                }
+            }
+        }
+        VideoRotation::Ccw90 => {
+            for row in 0..dst_h {
+                for col in 0..dst_w {
+                    let src_r = col;
+                    let src_c = src_w - 1 - row;
+                    dst[row * dst_stride + col] = src[src_r * src_stride + src_c];
+                }
+            }
+        }
+        VideoRotation::Half => {
+            for row in 0..dst_h {
+                for col in 0..dst_w {
+                    let src_r = src_h - 1 - row;
+                    let src_c = src_w - 1 - col;
+                    dst[row * dst_stride + col] = src[src_r * src_stride + src_c];
+                }
+            }
+        }
+        VideoRotation::None => {}
+    }
+}
+
+fn prepare_rotated_yuv420p(
+    src: &ffmpeg::frame::Video,
+    rotation: VideoRotation,
+    format_converter: &mut Option<ffmpeg::software::scaling::Context>,
+) -> Result<Option<ffmpeg::frame::Video>, ImportError> {
+    if matches!(rotation, VideoRotation::None) {
+        return Ok(None);
+    }
+
+    if src.format() == ffmpeg::format::Pixel::YUV420P {
+        return Ok(Some(transpose_yuv420p_frame(src, rotation)?));
+    }
+
+    if format_converter.is_none() {
+        *format_converter = Some(
+            ffmpeg::software::scaling::Context::get(
+                src.format(),
+                src.width(),
+                src.height(),
+                ffmpeg::format::Pixel::YUV420P,
+                src.width(),
+                src.height(),
+                ffmpeg::software::scaling::Flags::BILINEAR,
+            )
+            .map_err(|e| {
+                ImportError::TranscodeFailed(format!(
+                    "Failed to create rotation format converter: {e}"
+                ))
+            })?,
+        );
+    }
+
+    let converter = format_converter
+        .as_mut()
+        .ok_or_else(|| ImportError::TranscodeFailed("rotation converter missing".to_string()))?;
+
+    let mut yuv = ffmpeg::frame::Video::empty();
+    yuv.set_format(ffmpeg::format::Pixel::YUV420P);
+    yuv.set_width(src.width());
+    yuv.set_height(src.height());
+    let ret = unsafe { ffmpeg::ffi::av_frame_get_buffer(yuv.as_mut_ptr(), 0) };
+    if ret < 0 {
+        return Err(ImportError::TranscodeFailed(format!(
+            "av_frame_get_buffer failed for rotation YUV target (ret={ret})"
+        )));
+    }
+    converter.run(src, &mut yuv)?;
+    yuv.set_pts(src.pts());
+
+    Ok(Some(transpose_yuv420p_frame(&yuv, rotation)?))
+}
+
+fn transpose_yuv420p_frame(
+    src: &ffmpeg::frame::Video,
+    rotation: VideoRotation,
+) -> Result<ffmpeg::frame::Video, ImportError> {
+    if src.format() != ffmpeg::format::Pixel::YUV420P {
+        return Err(ImportError::TranscodeFailed(format!(
+            "Cannot transpose non-YUV420P frame (got {:?})",
+            src.format()
+        )));
+    }
+
+    let src_w = src.width() as usize;
+    let src_h = src.height() as usize;
+
+    let (dst_w, dst_h) = match rotation {
+        VideoRotation::Cw90 | VideoRotation::Ccw90 => (src_h, src_w),
+        VideoRotation::Half => (src_w, src_h),
+        VideoRotation::None => (src_w, src_h),
+    };
+
+    let mut dst = ffmpeg::frame::Video::empty();
+    dst.set_format(ffmpeg::format::Pixel::YUV420P);
+    dst.set_width(dst_w as u32);
+    dst.set_height(dst_h as u32);
+    let ret = unsafe { ffmpeg::ffi::av_frame_get_buffer(dst.as_mut_ptr(), 0) };
+    if ret < 0 {
+        return Err(ImportError::TranscodeFailed(format!(
+            "av_frame_get_buffer failed for rotated frame (ret={ret})"
+        )));
+    }
+
+    let src_y_stride = src.stride(0);
+    let src_u_stride = src.stride(1);
+    let src_v_stride = src.stride(2);
+
+    let src_y = src.data(0).to_vec();
+    let src_u = src.data(1).to_vec();
+    let src_v = src.data(2).to_vec();
+
+    let chroma_src_w = src_w / 2;
+    let chroma_src_h = src_h / 2;
+    let chroma_dst_w = dst_w / 2;
+    let chroma_dst_h = dst_h / 2;
+
+    {
+        let dst_y_stride = dst.stride(0);
+        let dst_y = dst.data_mut(0);
+        transpose_plane(
+            &src_y,
+            src_y_stride,
+            src_w,
+            src_h,
+            dst_y,
+            dst_y_stride,
+            dst_w,
+            dst_h,
+            rotation,
+        );
+    }
+    {
+        let dst_u_stride = dst.stride(1);
+        let dst_u = dst.data_mut(1);
+        transpose_plane(
+            &src_u,
+            src_u_stride,
+            chroma_src_w,
+            chroma_src_h,
+            dst_u,
+            dst_u_stride,
+            chroma_dst_w,
+            chroma_dst_h,
+            rotation,
+        );
+    }
+    {
+        let dst_v_stride = dst.stride(2);
+        let dst_v = dst.data_mut(2);
+        transpose_plane(
+            &src_v,
+            src_v_stride,
+            chroma_src_w,
+            chroma_src_h,
+            dst_v,
+            dst_v_stride,
+            chroma_dst_w,
+            chroma_dst_h,
+            rotation,
+        );
+    }
+
+    dst.set_pts(src.pts());
+
+    Ok(dst)
+}
+
 fn transcode_video(
     app: &AppHandle,
     source_path: &Path,
@@ -169,8 +415,18 @@ fn transcode_video(
     let (video_stream_index, video_info) = get_video_stream_info(&input)?;
     let audio_stream_info = get_audio_stream_info(&input);
 
-    let output_width = ensure_even(video_info.width);
-    let output_height = ensure_even(video_info.height);
+    let rotation = read_video_rotation(&input);
+    let needs_rotation = !matches!(rotation, VideoRotation::None);
+    if needs_rotation {
+        info!("Applying rotation to imported video: {:?}", rotation);
+    }
+    let (effective_source_width, effective_source_height) = match rotation {
+        VideoRotation::Cw90 | VideoRotation::Ccw90 => (video_info.height, video_info.width),
+        _ => (video_info.width, video_info.height),
+    };
+
+    let output_width = ensure_even(effective_source_width);
+    let output_height = ensure_even(effective_source_height);
     let fps = if video_info.frame_rate.1 > 0 {
         ((video_info.frame_rate.0 as f64 / video_info.frame_rate.1 as f64).round() as u32)
             .clamp(1, 120)
@@ -258,6 +514,7 @@ fn transcode_video(
     let mut last_progress = 0.0;
 
     let mut scaler: Option<ffmpeg::software::scaling::Context> = None;
+    let mut rotation_format_converter: Option<ffmpeg::software::scaling::Context> = None;
 
     for (stream, packet) in input.packets() {
         let stream_index = stream.index();
@@ -271,16 +528,25 @@ fn transcode_video(
                     / video_time_base.denominator().max(1) as f64;
                 let duration = StdDuration::from_secs_f64(time_secs.max(0.0));
 
-                let frame_to_encode = if video_frame.format() != ffmpeg::format::Pixel::YUV420P
-                    || video_frame.width() != output_width
-                    || video_frame.height() != output_height
+                let rotated_owned = prepare_rotated_yuv420p(
+                    &video_frame,
+                    rotation,
+                    &mut rotation_format_converter,
+                )?;
+                let frame_for_scaling: &ffmpeg::frame::Video =
+                    rotated_owned.as_ref().unwrap_or(&video_frame);
+
+                let frame_to_encode = if frame_for_scaling.format()
+                    != ffmpeg::format::Pixel::YUV420P
+                    || frame_for_scaling.width() != output_width
+                    || frame_for_scaling.height() != output_height
                 {
                     if scaler.is_none() {
                         scaler = Some(
                             ffmpeg::software::scaling::Context::get(
-                                video_frame.format(),
-                                video_frame.width(),
-                                video_frame.height(),
+                                frame_for_scaling.format(),
+                                frame_for_scaling.width(),
+                                frame_for_scaling.height(),
                                 ffmpeg::format::Pixel::YUV420P,
                                 output_width,
                                 output_height,
@@ -307,11 +573,11 @@ fn transcode_video(
                         ));
                     }
 
-                    scaler.run(&video_frame, &mut scaled_frame)?;
+                    scaler.run(frame_for_scaling, &mut scaled_frame)?;
                     scaled_frame.set_pts(video_frame.pts());
                     scaled_frame
                 } else {
-                    video_frame.clone()
+                    frame_for_scaling.clone()
                 };
 
                 video_encoder
@@ -358,9 +624,14 @@ fn transcode_video(
             / video_time_base.denominator().max(1) as f64;
         let duration = StdDuration::from_secs_f64(time_secs.max(0.0));
 
-        let frame_to_encode = if video_frame.format() != ffmpeg::format::Pixel::YUV420P
-            || video_frame.width() != output_width
-            || video_frame.height() != output_height
+        let rotated_owned =
+            prepare_rotated_yuv420p(&video_frame, rotation, &mut rotation_format_converter)?;
+        let frame_for_scaling: &ffmpeg::frame::Video =
+            rotated_owned.as_ref().unwrap_or(&video_frame);
+
+        let frame_to_encode = if frame_for_scaling.format() != ffmpeg::format::Pixel::YUV420P
+            || frame_for_scaling.width() != output_width
+            || frame_for_scaling.height() != output_height
         {
             if let Some(scaler) = &mut scaler {
                 let mut scaled_frame = ffmpeg::frame::Video::empty();
@@ -373,14 +644,14 @@ fn transcode_video(
                         "Failed to allocate frame buffer".to_string(),
                     ));
                 }
-                scaler.run(&video_frame, &mut scaled_frame)?;
+                scaler.run(frame_for_scaling, &mut scaled_frame)?;
                 scaled_frame.set_pts(video_frame.pts());
                 scaled_frame
             } else {
-                video_frame.clone()
+                frame_for_scaling.clone()
             }
         } else {
-            video_frame.clone()
+            frame_for_scaling.clone()
         };
 
         video_encoder
