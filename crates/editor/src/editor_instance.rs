@@ -1,6 +1,11 @@
+use crate::audio::{
+    AudioCacheEntry, AudioCacheState, AudioSegment, CacheableSample, render_prerendered_samples,
+};
 use crate::editor;
-use crate::playback::{self, PlaybackHandle, PlaybackStartError};
+use crate::playback::{self, AudioCacheSlot, PlaybackHandle, PlaybackStartError};
+use crate::segments::get_audio_segments;
 use cap_audio::AudioData;
+use cap_media_info::{AudioInfo, Sample, Type};
 use cap_project::StudioRecordingMeta;
 use cap_project::{
     CursorEvents, ProjectConfiguration, RecordingMeta, RecordingMetaInner, TimelineConfiguration,
@@ -14,9 +19,10 @@ use cap_rendering::{
 use std::{
     path::{Path, PathBuf},
     sync::{
-        Arc,
+        Arc, RwLock,
         atomic::{AtomicBool, Ordering},
     },
+    time::Duration,
 };
 use tokio::sync::{Mutex, watch};
 use tokio_util::sync::CancellationToken;
@@ -88,6 +94,8 @@ pub struct EditorInstance {
     pub export_preview_active: AtomicBool,
     pub export_active: AtomicBool,
     runtime_handle: tokio::runtime::Handle,
+    audio_cache: AudioCacheSlot,
+    audio_cache_task: Mutex<Option<tokio::task::JoinHandle<()>>>,
 }
 
 impl EditorInstance {
@@ -288,6 +296,8 @@ impl EditorInstance {
         let (preview_tx, preview_rx) = watch::channel(None);
         let (playback_active_tx, playback_active_rx) = watch::channel(false);
 
+        let audio_cache: AudioCacheSlot = Arc::new(RwLock::new(AudioCacheState::new()));
+
         let this = Arc::new(Self {
             project_path,
             recordings,
@@ -308,10 +318,14 @@ impl EditorInstance {
             export_preview_active: AtomicBool::new(false),
             export_active: AtomicBool::new(false),
             runtime_handle: tokio::runtime::Handle::current(),
+            audio_cache,
+            audio_cache_task: Mutex::new(None),
         });
 
         this.state.lock().await.preview_task =
             Some(this.clone().spawn_preview_renderer(preview_rx));
+
+        this.spawn_audio_cache_task().await;
 
         Ok(this)
     }
@@ -334,11 +348,31 @@ impl EditorInstance {
             }
         }
 
+        if let Some(handle) = self.audio_cache_task.lock().await.take() {
+            handle.abort();
+        }
+
         self.renderer.stop().await;
 
         tokio::task::yield_now().await;
 
         drop(state);
+    }
+
+    async fn spawn_audio_cache_task(self: &Arc<Self>) {
+        let segments = get_audio_segments(&self.segment_medias);
+        if segments.is_empty() || segments[0].tracks.is_empty() {
+            return;
+        }
+
+        let cache = self.audio_cache.clone();
+        let project_rx = self.project_config.0.subscribe();
+
+        let handle = self
+            .runtime_handle
+            .spawn(audio_cache_loop(cache, project_rx, segments));
+
+        *self.audio_cache_task.lock().await = Some(handle);
     }
 
     pub async fn modify_and_emit_state(&self, modify: impl Fn(&mut EditorState)) {
@@ -359,6 +393,7 @@ impl EditorInstance {
                 render_constants: self.render_constants.clone(),
                 start_frame_number,
                 project: self.project_config.0.subscribe(),
+                audio_cache: self.audio_cache.clone(),
             })
             .start(fps, resolution_base)
             .await
@@ -760,4 +795,114 @@ fn get_calibration_offset(
         (Some(cam), Some(mic)) => store.get_offset(cam, mic).map(|o| o as f32),
         _ => None,
     }
+}
+
+const AUDIO_CACHE_DEBOUNCE: Duration = Duration::from_millis(300);
+
+async fn audio_cache_loop(
+    cache: AudioCacheSlot,
+    mut project_rx: watch::Receiver<ProjectConfiguration>,
+    segments: Vec<AudioSegment>,
+) {
+    project_rx.borrow_and_update();
+
+    loop {
+        if project_rx.changed().await.is_err() {
+            return;
+        }
+
+        if let Ok(mut guard) = cache.write() {
+            guard.invalidate();
+        }
+
+        loop {
+            tokio::select! {
+                _ = tokio::time::sleep(AUDIO_CACHE_DEBOUNCE) => break,
+                res = project_rx.changed() => {
+                    if res.is_err() {
+                        return;
+                    }
+                }
+            }
+        }
+
+        let project = project_rx.borrow_and_update().clone();
+
+        let output_info = match cache.read().ok().and_then(|guard| guard.last_format) {
+            Some(info) => info,
+            None => continue,
+        };
+
+        let duration_secs = project
+            .timeline
+            .as_ref()
+            .map(|t| t.duration())
+            .unwrap_or(0.0);
+        if duration_secs <= 0.0 {
+            continue;
+        }
+
+        let render_segments = segments.clone();
+        let render_project = project.clone();
+
+        let entry_result = tokio::task::spawn_blocking(move || {
+            render_audio_cache_entry(render_segments, &render_project, output_info, duration_secs)
+        })
+        .await;
+
+        let entry = match entry_result {
+            Ok(Some(entry)) => entry,
+            Ok(None) => continue,
+            Err(e) => {
+                warn!("audio cache render task failed: {e}");
+                continue;
+            }
+        };
+
+        if project_rx.has_changed().unwrap_or(false) {
+            continue;
+        }
+
+        if let Ok(mut guard) = cache.write() {
+            guard.install(entry);
+        }
+    }
+}
+
+fn render_audio_cache_entry(
+    segments: Vec<AudioSegment>,
+    project: &ProjectConfiguration,
+    output_info: AudioInfo,
+    duration_secs: f64,
+) -> Option<AudioCacheEntry> {
+    let samples =
+        match output_info.sample_format {
+            Sample::U8(Type::Packed) => u8::into_cache(Arc::new(render_prerendered_samples::<u8>(
+                segments,
+                project,
+                output_info,
+                duration_secs,
+            ))),
+            Sample::I16(Type::Packed) => i16::into_cache(Arc::new(
+                render_prerendered_samples::<i16>(segments, project, output_info, duration_secs),
+            )),
+            Sample::I32(Type::Packed) => i32::into_cache(Arc::new(
+                render_prerendered_samples::<i32>(segments, project, output_info, duration_secs),
+            )),
+            Sample::I64(Type::Packed) => i64::into_cache(Arc::new(
+                render_prerendered_samples::<i64>(segments, project, output_info, duration_secs),
+            )),
+            Sample::F32(Type::Packed) => f32::into_cache(Arc::new(
+                render_prerendered_samples::<f32>(segments, project, output_info, duration_secs),
+            )),
+            Sample::F64(Type::Packed) => f64::into_cache(Arc::new(
+                render_prerendered_samples::<f64>(segments, project, output_info, duration_secs),
+            )),
+            _ => return None,
+        };
+
+    Some(AudioCacheEntry {
+        samples,
+        output_info,
+    })
 }

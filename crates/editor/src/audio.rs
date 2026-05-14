@@ -523,89 +523,169 @@ impl AudioResampler {
     }
 }
 
+pub fn render_prerendered_samples<T: FromSampleBytes>(
+    segments: Vec<AudioSegment>,
+    project: &ProjectConfiguration,
+    output_info: AudioInfo,
+    duration_secs: f64,
+) -> Vec<T> {
+    let output_info = output_info.for_ffmpeg_output();
+
+    info!(
+        duration_secs = duration_secs,
+        sample_rate = output_info.sample_rate,
+        channels = output_info.channels,
+        "Pre-rendering audio for playback"
+    );
+
+    let mut renderer = AudioRenderer::new(segments);
+    let mut resampler = AudioResampler::new(output_info).unwrap();
+
+    let total_source_samples = (duration_secs * AudioData::SAMPLE_RATE as f64) as usize;
+    let estimated_output_samples =
+        (duration_secs * output_info.sample_rate as f64) as usize * output_info.channels;
+
+    let mut samples: Vec<T> = Vec::with_capacity(estimated_output_samples + 10000);
+    let bytes_per_sample = output_info.sample_size();
+    let chunk_size = 1024usize;
+
+    renderer.set_playhead(0.0, project);
+
+    let mut rendered_source_samples = 0usize;
+    let output_chunk_samples = (chunk_size as f64 * output_info.sample_rate as f64
+        / AudioData::SAMPLE_RATE as f64) as usize
+        * output_info.channels;
+
+    while rendered_source_samples < total_source_samples {
+        let frame_opt = renderer.render_frame(chunk_size, project);
+
+        match frame_opt {
+            Some(frame) => {
+                let resampled = resampler.queue_and_process_frame(&frame);
+                for chunk in resampled.chunks(bytes_per_sample) {
+                    samples.push(T::from_bytes(chunk));
+                }
+            }
+            None => {
+                if let Some(flushed) = resampler.flush_frame() {
+                    for chunk in flushed.chunks(bytes_per_sample) {
+                        samples.push(T::from_bytes(chunk));
+                    }
+                }
+                for _ in 0..output_chunk_samples {
+                    samples.push(T::EQUILIBRIUM);
+                }
+            }
+        }
+
+        rendered_source_samples += chunk_size;
+    }
+
+    while let Some(flushed) = resampler.flush_frame() {
+        if flushed.is_empty() {
+            break;
+        }
+        for chunk in flushed.chunks(bytes_per_sample) {
+            samples.push(T::from_bytes(chunk));
+        }
+    }
+
+    info!(
+        total_samples = samples.len(),
+        memory_mb = (samples.len() * std::mem::size_of::<T>()) / (1024 * 1024),
+        "Audio pre-rendering complete"
+    );
+
+    samples
+}
+
+#[derive(Debug, Clone)]
+pub enum CachedPrerenderedAudio {
+    U8(Arc<Vec<u8>>),
+    I16(Arc<Vec<i16>>),
+    I32(Arc<Vec<i32>>),
+    I64(Arc<Vec<i64>>),
+    F32(Arc<Vec<f32>>),
+    F64(Arc<Vec<f64>>),
+}
+
+#[derive(Debug, Clone)]
+pub struct AudioCacheEntry {
+    pub samples: CachedPrerenderedAudio,
+    pub output_info: AudioInfo,
+}
+
+impl AudioCacheEntry {
+    pub fn matches(&self, target: &AudioInfo) -> bool {
+        let target = target.for_ffmpeg_output();
+        self.output_info.matches_format(&target)
+    }
+}
+
+#[derive(Debug, Default)]
+pub struct AudioCacheState {
+    pub entry: Option<AudioCacheEntry>,
+    pub last_format: Option<AudioInfo>,
+}
+
+impl AudioCacheState {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn invalidate(&mut self) {
+        self.entry = None;
+    }
+
+    pub fn matching(&self, target: &AudioInfo) -> Option<&AudioCacheEntry> {
+        self.entry.as_ref().filter(|entry| entry.matches(target))
+    }
+
+    pub fn install(&mut self, entry: AudioCacheEntry) {
+        self.last_format = Some(entry.output_info);
+        self.entry = Some(entry);
+    }
+}
+
+pub trait CacheableSample: FromSampleBytes + Sized {
+    fn from_cache(cache: &CachedPrerenderedAudio) -> Option<Arc<Vec<Self>>>;
+    fn into_cache(samples: Arc<Vec<Self>>) -> CachedPrerenderedAudio;
+}
+
+macro_rules! impl_cacheable_sample {
+    ($ty:ty, $variant:ident) => {
+        impl CacheableSample for $ty {
+            fn from_cache(cache: &CachedPrerenderedAudio) -> Option<Arc<Vec<Self>>> {
+                match cache {
+                    CachedPrerenderedAudio::$variant(samples) => Some(samples.clone()),
+                    _ => None,
+                }
+            }
+
+            fn into_cache(samples: Arc<Vec<Self>>) -> CachedPrerenderedAudio {
+                CachedPrerenderedAudio::$variant(samples)
+            }
+        }
+    };
+}
+
+impl_cacheable_sample!(u8, U8);
+impl_cacheable_sample!(i16, I16);
+impl_cacheable_sample!(i32, I32);
+impl_cacheable_sample!(i64, I64);
+impl_cacheable_sample!(f32, F32);
+impl_cacheable_sample!(f64, F64);
+
 pub struct PrerenderedAudioBuffer<T: FromSampleBytes> {
-    samples: Vec<T>,
+    samples: Arc<Vec<T>>,
     read_position: usize,
     sample_rate: u32,
     channels: usize,
 }
 
 impl<T: FromSampleBytes> PrerenderedAudioBuffer<T> {
-    pub fn new(
-        segments: Vec<AudioSegment>,
-        project: &ProjectConfiguration,
-        output_info: AudioInfo,
-        duration_secs: f64,
-    ) -> Self {
-        // Clamp output info for FFmpeg compatibility (max 8 channels)
-        // The resampler will produce audio with this channel count
+    pub fn from_samples(samples: Arc<Vec<T>>, output_info: AudioInfo) -> Self {
         let output_info = output_info.for_ffmpeg_output();
-
-        info!(
-            duration_secs = duration_secs,
-            sample_rate = output_info.sample_rate,
-            channels = output_info.channels,
-            "Pre-rendering audio for playback"
-        );
-
-        let mut renderer = AudioRenderer::new(segments);
-        let mut resampler = AudioResampler::new(output_info).unwrap();
-
-        let total_source_samples = (duration_secs * AudioData::SAMPLE_RATE as f64) as usize;
-        let estimated_output_samples =
-            (duration_secs * output_info.sample_rate as f64) as usize * output_info.channels;
-
-        let mut samples: Vec<T> = Vec::with_capacity(estimated_output_samples + 10000);
-        let bytes_per_sample = output_info.sample_size();
-        let chunk_size = 1024usize;
-
-        renderer.set_playhead(0.0, project);
-
-        let mut rendered_source_samples = 0usize;
-        let output_chunk_samples = (chunk_size as f64 * output_info.sample_rate as f64
-            / AudioData::SAMPLE_RATE as f64) as usize
-            * output_info.channels;
-
-        while rendered_source_samples < total_source_samples {
-            let frame_opt = renderer.render_frame(chunk_size, project);
-
-            match frame_opt {
-                Some(frame) => {
-                    let resampled = resampler.queue_and_process_frame(&frame);
-                    for chunk in resampled.chunks(bytes_per_sample) {
-                        samples.push(T::from_bytes(chunk));
-                    }
-                }
-                None => {
-                    if let Some(flushed) = resampler.flush_frame() {
-                        for chunk in flushed.chunks(bytes_per_sample) {
-                            samples.push(T::from_bytes(chunk));
-                        }
-                    }
-                    for _ in 0..output_chunk_samples {
-                        samples.push(T::EQUILIBRIUM);
-                    }
-                }
-            }
-
-            rendered_source_samples += chunk_size;
-        }
-
-        while let Some(flushed) = resampler.flush_frame() {
-            if flushed.is_empty() {
-                break;
-            }
-            for chunk in flushed.chunks(bytes_per_sample) {
-                samples.push(T::from_bytes(chunk));
-            }
-        }
-
-        info!(
-            total_samples = samples.len(),
-            memory_mb = (samples.len() * std::mem::size_of::<T>()) / (1024 * 1024),
-            "Audio pre-rendering complete"
-        );
-
         Self {
             samples,
             read_position: 0,
@@ -648,6 +728,7 @@ impl<T: FromSampleBytes> PrerenderedAudioBuffer<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use cap_media_info::{Sample, Type};
     use cap_project::{
         ClipConfiguration, ProjectConfiguration, TimelineConfiguration, TimelineSegment,
     };
@@ -799,12 +880,10 @@ mod tests {
 
     #[test]
     fn prerendered_audio_reports_audible_playhead_after_output_latency() {
-        let mut buffer = PrerenderedAudioBuffer::<f32> {
-            samples: vec![0.0; AudioData::SAMPLE_RATE as usize * 2],
-            read_position: 0,
-            sample_rate: AudioData::SAMPLE_RATE,
-            channels: 2,
-        };
+        let samples = Arc::new(vec![0.0_f32; AudioData::SAMPLE_RATE as usize * 2]);
+        let output_info =
+            AudioInfo::new(Sample::F32(Type::Packed), AudioData::SAMPLE_RATE, 2).unwrap();
+        let mut buffer = PrerenderedAudioBuffer::<f32>::from_samples(samples, output_info);
 
         buffer.set_playhead(0.5);
 

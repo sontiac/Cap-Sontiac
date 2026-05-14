@@ -28,8 +28,13 @@ use tracing::{error, info, warn};
 #[cfg(not(target_os = "windows"))]
 use crate::audio::AudioPlaybackBuffer;
 use crate::{
-    audio::AudioSegment, editor, editor_instance::SegmentMedia, segments::get_audio_segments,
+    audio::{AudioCacheState, AudioSegment, CacheableSample},
+    editor,
+    editor_instance::SegmentMedia,
+    segments::get_audio_segments,
 };
+
+pub type AudioCacheSlot = Arc<RwLock<AudioCacheState>>;
 
 const PREFETCH_BUFFER_SIZE: usize = 90;
 const PARALLEL_DECODE_TASKS: usize = 4;
@@ -98,6 +103,7 @@ pub struct Playback {
     pub start_frame_number: u32,
     pub project: watch::Receiver<ProjectConfiguration>,
     pub segment_medias: Arc<Vec<SegmentMedia>>,
+    pub audio_cache: AudioCacheSlot,
 }
 
 #[derive(Clone, Copy)]
@@ -457,6 +463,7 @@ impl Playback {
                 fps,
                 playhead_rx: audio_playhead_rx,
                 duration_secs: duration,
+                cache: self.audio_cache.clone(),
             };
 
             let frame_duration = Duration::from_secs_f64(1.0 / fps_f64);
@@ -969,6 +976,7 @@ struct AudioPlayback {
     fps: u32,
     playhead_rx: watch::Receiver<f64>,
     duration_secs: f64,
+    cache: AudioCacheSlot,
 }
 
 impl AudioPlayback {
@@ -1363,9 +1371,9 @@ impl AudioPlayback {
         duration_secs: f64,
     ) -> Result<(watch::Receiver<bool>, cpal::Stream), MediaError>
     where
-        T: FromSampleBytes + cpal::Sample,
+        T: FromSampleBytes + cpal::Sample + CacheableSample + Sync,
     {
-        use crate::audio::PrerenderedAudioBuffer;
+        use crate::audio::{AudioCacheEntry, PrerenderedAudioBuffer, render_prerendered_samples};
 
         let AudioPlayback {
             stop_rx,
@@ -1374,6 +1382,7 @@ impl AudioPlayback {
             segments,
             fps,
             playhead_rx,
+            cache,
             ..
         } = self;
 
@@ -1398,13 +1407,37 @@ impl AudioPlayback {
             "Creating pre-rendered audio stream"
         );
 
-        let project_snapshot = project.borrow().clone();
-        let mut audio_buffer = PrerenderedAudioBuffer::<T>::new(
-            segments,
-            &project_snapshot,
-            output_info,
-            duration_secs,
-        );
+        let cached_samples: Option<Arc<Vec<T>>> = cache.read().ok().and_then(|guard| {
+            guard
+                .matching(&output_info)
+                .and_then(|entry| T::from_cache(&entry.samples))
+        });
+
+        let mut audio_buffer = if let Some(samples) = cached_samples {
+            info!(
+                total_samples = samples.len(),
+                "Reusing cached pre-rendered audio"
+            );
+            PrerenderedAudioBuffer::<T>::from_samples(samples, output_info)
+        } else {
+            let mut project_rx_local = project.clone();
+            let project_snapshot = project_rx_local.borrow_and_update().clone();
+            let samples = render_prerendered_samples::<T>(
+                segments,
+                &project_snapshot,
+                output_info,
+                duration_secs,
+            );
+            let samples_arc = Arc::new(samples);
+            let project_changed_during_render = project_rx_local.has_changed().unwrap_or(false);
+            if !project_changed_during_render && let Ok(mut guard) = cache.write() {
+                guard.install(AudioCacheEntry {
+                    samples: T::into_cache(samples_arc.clone()),
+                    output_info,
+                });
+            }
+            PrerenderedAudioBuffer::<T>::from_samples(samples_arc, output_info)
+        };
 
         #[cfg(not(target_os = "windows"))]
         let mut latency_corrector = {
