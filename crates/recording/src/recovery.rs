@@ -108,6 +108,23 @@ impl RecoveryManager {
         }
     }
 
+    /// Remux a recording in place if its tracks are still fragment directories (status `NeedsRemux`,
+    /// e.g. straight after a fragmented studio stop), running the same `recover` the desktop uses
+    /// after stop. A no-op for recordings already stored as progressive mp4, so callers can run it
+    /// unconditionally before consuming a `.cap`.
+    pub fn remux_if_needed(project_path: &Path) -> Result<bool, RecoveryError> {
+        let Some(incomplete) = Self::find_incomplete_single(project_path) else {
+            return Ok(false);
+        };
+
+        if incomplete.recoverable_segments.is_empty() {
+            return Ok(false);
+        }
+
+        Self::recover(&incomplete)?;
+        Ok(true)
+    }
+
     pub fn find_incomplete(recordings_dir: &Path) -> Vec<IncompleteRecording> {
         let mut incomplete = Vec::new();
 
@@ -1103,12 +1120,10 @@ impl RecoveryManager {
         match probe_video_can_decode(path) {
             Ok(true) => Ok(()),
             Ok(false) => Err(RecoveryError::UnplayableVideo(format!(
-                "{} video has no decodable frames: {path:?}",
-                label
+                "{label} video has no decodable frames: {path:?}"
             ))),
             Err(e) => Err(RecoveryError::UnplayableVideo(format!(
-                "{} video validation failed for {path:?}: {e}",
-                label
+                "{label} video validation failed for {path:?}: {e}"
             ))),
         }
     }
@@ -1124,8 +1139,7 @@ impl RecoveryManager {
 
         probe_video_seek_points(path, EXPORT_SEEK_PROBE_SAMPLE_COUNT).map_err(|e| {
             RecoveryError::UnplayableVideo(format!(
-                "{} video seek validation failed for {path:?}: {e}",
-                label
+                "{label} video seek validation failed for {path:?}: {e}"
             ))
         })?;
 
@@ -1220,6 +1234,7 @@ impl RecoveryManager {
                                 device_id: original_segment
                                     .and_then(|s| s.mic.as_ref())
                                     .and_then(|m| m.device_id.clone()),
+                                gap_summary: None,
                             })
                         } else {
                             None
@@ -1243,6 +1258,7 @@ impl RecoveryManager {
                                 device_id: original_segment
                                     .and_then(|s| s.system_audio.as_ref())
                                     .and_then(|a| a.device_id.clone()),
+                                gap_summary: None,
                             })
                         } else {
                             None
