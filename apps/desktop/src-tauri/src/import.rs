@@ -56,10 +56,6 @@ fn emit_progress(
     .emit(app);
 }
 
-fn check_project_exists(project_path: &Path) -> bool {
-    project_path.exists() && project_path.join("recording-meta.json").exists()
-}
-
 fn generate_image_project_name(source_path: &Path) -> String {
     let stem = source_path
         .file_stem()
@@ -70,15 +66,6 @@ fn generate_image_project_name(source_path: &Path) -> String {
     let date_str = now.format("%Y-%m-%d at %H.%M.%S").to_string();
 
     format!("{stem} {date_str}")
-}
-
-fn sanitize_filename(name: &str) -> String {
-    name.chars()
-        .map(|c| match c {
-            '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|' => '_',
-            _ => c,
-        })
-        .collect()
 }
 
 fn has_supported_extension(path: &Path, extensions: &[&str]) -> bool {
@@ -391,7 +378,7 @@ fn relative_file_name(path: &RelativePathBuf, fallback: &str) -> String {
 }
 
 fn unique_file_name(dir: &Path, preferred: &str) -> String {
-    let sanitized = sanitize_filename(preferred);
+    let sanitized = cap_video_import::sanitize_filename(preferred);
     let sanitized = if sanitized.is_empty() {
         "file".to_string()
     } else {
@@ -537,7 +524,7 @@ fn copy_keyboard_path(
 
         let target_relative_path = RelativePathBuf::from(format!(
             "{target_relative_dir}/{}",
-            sanitize_filename(&file_name)
+            cap_video_import::sanitize_filename(&file_name)
         ));
         copy_file_to_relative_path(&source_path, target_project_path, &target_relative_path)?;
 
@@ -565,7 +552,7 @@ fn copy_keyboard_path(
 
         let target_relative_path = RelativePathBuf::from(format!(
             "{target_relative_dir}/{}",
-            sanitize_filename(file_name)
+            cap_video_import::sanitize_filename(file_name)
         ));
         copy_file_to_relative_path(&source_path, target_project_path, &target_relative_path)?;
 
@@ -1102,7 +1089,7 @@ async fn append_mp4_to_editor_project(
                     &format!("Converting video... {}%", (progress * 100.0) as u32),
                 )
             },
-            || !check_project_exists(&target_project_path_for_transcode),
+            || !cap_video_import::check_project_exists(&target_project_path_for_transcode),
         )
     })
     .await

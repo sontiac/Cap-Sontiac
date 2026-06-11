@@ -17,7 +17,7 @@ pub struct ImportedVideo {
     pub has_audio: bool,
 }
 
-fn check_project_exists(project_path: &Path) -> bool {
+pub fn check_project_exists(project_path: &Path) -> bool {
     project_path.exists() && project_path.join("recording-meta.json").exists()
 }
 

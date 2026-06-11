@@ -6,7 +6,8 @@ mod thumbnail;
 mod transcode;
 
 pub use import::{
-    ImportedVideo, generate_project_name, import_video, sanitize_filename, unique_project_path,
+    ImportedVideo, check_project_exists, generate_project_name, import_video, sanitize_filename,
+    unique_project_path,
 };
 pub use thumbnail::write_video_thumbnail;
 pub use transcode::{TranscodeOutput, transcode_video};
