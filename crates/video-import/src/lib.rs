@@ -6,8 +6,8 @@ mod thumbnail;
 mod transcode;
 
 pub use import::{
-    ImportedVideo, check_project_exists, generate_project_name, import_video, sanitize_filename,
-    unique_project_path,
+    ImportedVideo, PreparedImport, check_project_exists, generate_project_name,
+    prepare_video_import, sanitize_filename, unique_project_path,
 };
 pub use thumbnail::write_video_thumbnail;
 pub use transcode::{TranscodeOutput, transcode_video};
@@ -37,6 +37,8 @@ pub enum ImportError {
     Ffmpeg(#[from] ffmpeg::Error),
     #[error("Transcoding failed: {0}")]
     TranscodeFailed(String),
+    #[error("Failed to save project metadata: {0}")]
+    MetaSaveFailed(String),
     #[error("Import cancelled")]
     Cancelled,
 }

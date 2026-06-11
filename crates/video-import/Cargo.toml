@@ -10,7 +10,7 @@ workspace = true
 cap-enc-ffmpeg = { path = "../enc-ffmpeg" }
 cap-media-info = { path = "../media-info" }
 cap-project = { path = "../project" }
-chrono = { version = "0.4.31", features = ["serde"] }
+chrono = "0.4.31"
 ffmpeg = { workspace = true }
 image = "0.25.2"
 relative-path = { version = "1.9.3", features = ["serde"] }
@@ -21,4 +21,5 @@ tracing = { workspace = true }
 workspace-hack = { version = "0.1", path = "../workspace-hack" }
 
 [dev-dependencies]
+serde_json = { workspace = true }
 tempfile = "3"

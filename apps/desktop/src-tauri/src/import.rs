@@ -958,29 +958,30 @@ pub async fn start_video_import(app: AppHandle, source_path: PathBuf) -> Result<
         .map_err(|e| e.to_string())?
         .join("recordings");
 
-    let can_decode = cap_enc_ffmpeg::remux::probe_video_can_decode(&source_path)
-        .map_err(|e| format!("Cannot decode video: {e}"))?;
-    if !can_decode {
-        return Err("Video format not supported or file is corrupted".to_string());
-    }
-
     let (project_path, project_name) =
         cap_video_import::unique_project_path(&recordings_dir, &source_path);
     let project_path_str = project_path.to_string_lossy().to_string();
     let return_path = project_path.clone();
 
+    emit_progress(
+        &app,
+        &project_path_str,
+        ImportStage::Probing,
+        0.0,
+        "Analyzing video file...",
+    );
+
+    let prepared =
+        cap_video_import::prepare_video_import(&source_path, &project_path, &project_name)
+            .map_err(|e| e.to_string())?;
+
     tokio::spawn(async move {
         let app_for_progress = app.clone();
         let progress_path = project_path_str.clone();
         let result = tokio::task::spawn_blocking(move || {
-            cap_video_import::import_video(
-                &source_path,
-                &project_path,
-                &project_name,
-                |stage, progress, message| {
-                    emit_progress(&app_for_progress, &progress_path, stage, progress, message)
-                },
-            )
+            prepared.run(|stage, progress, message| {
+                emit_progress(&app_for_progress, &progress_path, stage, progress, message)
+            })
         })
         .await;
 

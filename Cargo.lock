@@ -1869,6 +1869,7 @@ dependencies = [
  "image 0.25.8",
  "relative-path",
  "serde",
+ "serde_json",
  "specta",
  "tempfile",
  "thiserror 1.0.69",
