@@ -9,6 +9,7 @@ clap_complete = "4.5.38"
 cap-project = { path = "../../crates/project" }
 cap-recording = { path = "../../crates/recording" }
 cap-export = { path = "../../crates/export" }
+cap-video-import = { path = "../../crates/video-import" }
 cap-camera = { path = "../../crates/camera" }
 cap-cli-install = { path = "../../crates/cli-install" }
 scap-targets = { path = "../../crates/scap-targets" }

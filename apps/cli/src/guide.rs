@@ -195,6 +195,18 @@ fn build() -> Guide {
                     &["Progress", "Completed", "Error"],
                 )
             },
+            CommandDoc {
+                notes: Some(
+                    "Transcodes (one re-encode) into a new .cap studio project; rotation metadata is honored. \
+                     The resulting project has no project-config.json until one is written.",
+                ),
+                ..cmd(
+                    "import",
+                    "Import an external video file into the desktop library (or --dir) as a .cap studio project.",
+                    OutputMode::Ndjson,
+                    &["progress", "completed", "error"],
+                )
+            },
             cmd(
                 "screenshot",
                 "Capture a still of a screen/window. JSON emits {path,width,height}.",

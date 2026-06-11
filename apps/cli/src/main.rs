@@ -2,6 +2,7 @@ mod credentials;
 mod doctor;
 mod export;
 mod guide;
+mod import;
 mod project;
 mod record;
 mod recordings;
@@ -102,6 +103,8 @@ impl CliLogLevel {
 enum Commands {
     /// Export a '.cap' project to a video file
     Export(Export),
+    /// Import a video file into the Cap library as a .cap studio project
+    Import(import::ImportArgs),
     /// Render an export preview frame
     ExportPreview(ExportPreview),
     /// Inspect or validate a '.cap' project
@@ -383,6 +386,7 @@ async fn run(cli: Cli) -> Result<(), String> {
     let json = cli.json;
     match cli.command {
         Commands::Export(e) => e.run(json).await,
+        Commands::Import(args) => args.run(json),
         Commands::ExportPreview(e) => e.run().await,
         Commands::Project(args) => args.run(json),
         Commands::Record(RecordArgs { command, args }) => match command {

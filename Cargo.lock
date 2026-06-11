@@ -1060,6 +1060,7 @@ dependencies = [
  "cap-export",
  "cap-project",
  "cap-recording",
+ "cap-video-import",
  "cidre",
  "clap",
  "clap_complete",

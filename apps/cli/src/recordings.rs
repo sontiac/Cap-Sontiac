@@ -12,7 +12,7 @@ use crate::{OutputFormat, write_json};
 // which the user can reach with an explicit `--dir`.
 const DESKTOP_BUNDLE_IDENTIFIER: &str = "so.cap.desktop";
 
-fn default_library_dir() -> Result<PathBuf, String> {
+pub(crate) fn default_library_dir() -> Result<PathBuf, String> {
     dirs::data_dir()
         .ok_or_else(|| "Could not determine the OS application-data directory".to_string())
         .map(|dir| dir.join(DESKTOP_BUNDLE_IDENTIFIER).join("recordings"))

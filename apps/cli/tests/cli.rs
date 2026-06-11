@@ -573,6 +573,37 @@ fn auth_status_json_reports_source() {
     assert!(json["server"].is_string());
 }
 
+#[test]
+fn import_missing_source_emits_json_error_event() {
+    let dir = tempfile::tempdir().unwrap();
+    let output = run(&[
+        "import",
+        dir.path().join("nope.mp4").to_str().unwrap(),
+        "--dir",
+        dir.path().to_str().unwrap(),
+        "--json",
+    ]);
+    assert_eq!(output.status.code(), Some(1));
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let event: serde_json::Value = serde_json::from_str(stdout.lines().last().unwrap()).unwrap();
+    assert_eq!(event["type"], "error");
+    assert!(!event["error"].as_str().unwrap().is_empty());
+}
+
+#[test]
+fn guide_lists_import_command() {
+    let output = run(&["guide", "--json"]);
+    assert!(output.status.success());
+    let guide: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let commands: Vec<&str> = guide["commands"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|c| c["command"].as_str().unwrap())
+        .collect();
+    assert!(commands.contains(&"import"));
+}
+
 fn write_single_segment_meta(project: &Path) {
     std::fs::create_dir_all(project).unwrap();
     let meta = serde_json::json!({
