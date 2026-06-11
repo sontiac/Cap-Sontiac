@@ -104,8 +104,9 @@ pub fn config_set(
     collect_dropped_paths(&submitted, &round_tripped, "$", &mut dropped);
     if !dropped.is_empty() {
         return Err(format!(
-            "Write aborted: these submitted fields are not part of this Cap version's project config and would be dropped: {}",
-            dropped.join(", ")
+            "Write aborted: these submitted fields would not survive a round-trip through this Cap version's project config and would be silently dropped or rewritten: {}. Run `cap project config get {}` for the valid shape.",
+            dropped.join(", "),
+            project_path.display()
         ));
     }
 
@@ -375,6 +376,9 @@ mod tests {
     #[test]
     fn null_and_empty_inputs_are_not_reported() {
         let paths = dropped(json!({ "timeline": null }));
+        assert!(paths.is_empty(), "unexpected: {paths:?}");
+
+        let paths = dropped(json!({ "annotations": [], "hotkeys": {} }));
         assert!(paths.is_empty(), "unexpected: {paths:?}");
     }
 }
