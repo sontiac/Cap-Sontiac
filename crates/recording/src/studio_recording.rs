@@ -1173,6 +1173,7 @@ async fn stop_recording(
             text_segments: Vec::new(),
             caption_segments: Vec::new(),
             keyboard_segments: Vec::new(),
+            sfx_segments: Vec::new(),
         });
     }
     if let Some(clips) = clip_configs {
