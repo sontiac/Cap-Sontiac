@@ -5,6 +5,8 @@ mod import;
 mod thumbnail;
 mod transcode;
 
+pub use thumbnail::write_video_thumbnail;
+
 #[derive(Serialize, Type, Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ImportStage {
     Probing,

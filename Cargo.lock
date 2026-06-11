@@ -1287,6 +1287,7 @@ dependencies = [
  "cap-recording",
  "cap-rendering",
  "cap-utils",
+ "cap-video-import",
  "chrono",
  "cidre",
  "clipboard-rs",

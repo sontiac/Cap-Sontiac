@@ -90,6 +90,7 @@ cap-export = { path = "../../../crates/export" }
 cap-cli-install = { path = "../../../crates/cli-install", features = ["specta"] }
 cap-enc-ffmpeg = { path = "../../../crates/enc-ffmpeg" }
 cap-media-info = { path = "../../../crates/media-info" }
+cap-video-import = { path = "../../../crates/video-import" }
 scap-targets = { path = "../../../crates/scap-targets" }
 scap-screencapturekit = { path = "../../../crates/scap-screencapturekit" }
 scap-direct3d = { path = "../../../crates/scap-direct3d" }
