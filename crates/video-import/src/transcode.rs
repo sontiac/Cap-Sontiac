@@ -16,6 +16,11 @@ use tracing::info;
 
 use crate::ImportError;
 
+pub struct TranscodeOutput {
+    pub fps: u32,
+    pub sample_rate: Option<u32>,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum VideoRotation {
     None,
@@ -336,7 +341,7 @@ pub fn transcode_video(
     audio_output_path: Option<&Path>,
     mut on_progress: impl FnMut(f64),
     mut is_cancelled: impl FnMut() -> bool,
-) -> Result<(u32, Option<u32>), ImportError> {
+) -> Result<TranscodeOutput, ImportError> {
     use std::time::Duration as StdDuration;
 
     let mut input =
@@ -521,7 +526,7 @@ pub fn transcode_video(
                     last_progress = progress;
 
                     if is_cancelled() {
-                        info!("Import cancelled: project directory was deleted");
+                        info!("Transcode cancelled");
                         return Err(ImportError::Cancelled);
                     }
 
@@ -622,5 +627,5 @@ pub fn transcode_video(
         let _ = file.sync_all();
     }
 
-    Ok((fps, sample_rate))
+    Ok(TranscodeOutput { fps, sample_rate })
 }

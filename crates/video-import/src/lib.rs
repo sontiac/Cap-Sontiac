@@ -6,7 +6,7 @@ mod thumbnail;
 mod transcode;
 
 pub use thumbnail::write_video_thumbnail;
-pub use transcode::transcode_video;
+pub use transcode::{TranscodeOutput, transcode_video};
 
 #[derive(Serialize, Type, Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ImportStage {

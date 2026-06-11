@@ -5,7 +5,7 @@ use cap_project::{
     RecordingMetaInner, SingleSegment, StudioRecordingMeta, StudioRecordingStatus,
     TimelineConfiguration, TimelineSegment, VideoMeta, XY,
 };
-use cap_video_import::{ImportError, ImportStage, transcode_video};
+use cap_video_import::{ImportError, ImportStage, TranscodeOutput, transcode_video};
 use image::ImageEncoder;
 use relative_path::{Component as RelativeComponent, RelativePathBuf};
 use serde::Serialize;
@@ -1105,7 +1105,7 @@ pub async fn start_video_import(app: AppHandle, source_path: PathBuf) -> Result<
         .await;
 
         match result {
-            Ok(Ok((fps, sample_rate))) => {
+            Ok(Ok(TranscodeOutput { fps, sample_rate })) => {
                 emit_progress(
                     &app,
                     &project_path_str,
@@ -1287,7 +1287,7 @@ async fn append_mp4_to_editor_project(
     let project_path_str_for_transcode = project_path_str.clone();
     let target_project_path_for_transcode = target_project_path.clone();
 
-    let (fps, sample_rate) = tokio::task::spawn_blocking(move || {
+    let TranscodeOutput { fps, sample_rate } = tokio::task::spawn_blocking(move || {
         transcode_video(
             &source_path_for_transcode,
             &output_video_path_for_transcode,
