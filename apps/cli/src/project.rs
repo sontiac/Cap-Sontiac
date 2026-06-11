@@ -29,13 +29,86 @@ pub fn config_get(project_path: PathBuf) -> Result<(), String> {
     crate::write_json(&config)
 }
 
+fn numbers_match(a: &serde_json::Number, b: &serde_json::Value) -> bool {
+    match (a.as_f64(), b.as_f64()) {
+        (Some(x), Some(y)) => (x - y).abs() <= 1e-6 * x.abs().max(y.abs()).max(1.0),
+        _ => false,
+    }
+}
+
+fn is_vacuous(value: &serde_json::Value) -> bool {
+    match value {
+        serde_json::Value::Null => true,
+        serde_json::Value::Array(items) => items.is_empty(),
+        serde_json::Value::Object(map) => map.is_empty(),
+        _ => false,
+    }
+}
+
+fn collect_dropped_paths(
+    input: &serde_json::Value,
+    round_tripped: &serde_json::Value,
+    path: &str,
+    out: &mut Vec<String>,
+) {
+    match input {
+        serde_json::Value::Object(map) => match round_tripped.as_object() {
+            Some(rt) => {
+                for (key, value) in map {
+                    let child_path = format!("{path}.{key}");
+                    match rt.get(key) {
+                        Some(rt_value) => collect_dropped_paths(value, rt_value, &child_path, out),
+                        None => out.push(child_path),
+                    }
+                }
+            }
+            None if is_vacuous(input) => {}
+            None => out.push(path.to_string()),
+        },
+        serde_json::Value::Array(items) => match round_tripped.as_array() {
+            Some(rt) if rt.len() == items.len() => {
+                for (index, (value, rt_value)) in items.iter().zip(rt).enumerate() {
+                    collect_dropped_paths(value, rt_value, &format!("{path}[{index}]"), out);
+                }
+            }
+            _ if is_vacuous(input) => {}
+            _ => out.push(path.to_string()),
+        },
+        serde_json::Value::Number(number) => {
+            if !numbers_match(number, round_tripped) {
+                out.push(path.to_string());
+            }
+        }
+        serde_json::Value::Null => {}
+        _ => {
+            if input != round_tripped {
+                out.push(path.to_string());
+            }
+        }
+    }
+}
+
 pub fn config_set(
     project_path: PathBuf,
     settings_json: &str,
     format: OutputFormat,
 ) -> Result<(), String> {
+    let submitted: serde_json::Value = serde_json::from_str(settings_json)
+        .map_err(|e| format!("Invalid project config JSON: {e}"))?;
     let config: cap_project::ProjectConfiguration = serde_json::from_str(settings_json)
         .map_err(|e| format!("Invalid project config JSON: {e}"))?;
+    let round_tripped = serde_json::to_value(&config)
+        .map_err(|e| format!("Failed to re-serialize project config: {e}"))?;
+
+    let mut dropped = Vec::new();
+    collect_dropped_paths(&submitted, &round_tripped, "$", &mut dropped);
+    if !dropped.is_empty() {
+        return Err(format!(
+            "Write aborted: these submitted fields are not part of this Cap version's project config and would be dropped: {}",
+            dropped.join(", ")
+        ));
+    }
+
     // write() validates internally before its atomic temp-file-then-rename.
     config
         .write(&project_path)
@@ -245,5 +318,63 @@ pub fn validate(project_path: PathBuf, format: OutputFormat) -> Result<(), Strin
         Ok(())
     } else {
         Err("project validation failed".to_string())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    fn dropped(input: serde_json::Value) -> Vec<String> {
+        let config: cap_project::ProjectConfiguration =
+            serde_json::from_value(input.clone()).unwrap();
+        let round_tripped = serde_json::to_value(&config).unwrap();
+        let mut out = Vec::new();
+        collect_dropped_paths(&input, &round_tripped, "$", &mut out);
+        out
+    }
+
+    #[test]
+    fn unknown_top_level_field_is_reported() {
+        assert_eq!(dropped(json!({ "notAField": 1 })), vec!["$.notAField"]);
+    }
+
+    #[test]
+    fn typo_inside_timeline_is_reported() {
+        let paths = dropped(json!({
+            "timeline": { "segments": [], "zoomSegments": [], "segemnts": [] }
+        }));
+        assert_eq!(paths, vec!["$.timeline.segemnts"]);
+    }
+
+    #[test]
+    fn valid_timeline_passes() {
+        let paths = dropped(json!({
+            "timeline": {
+                "segments": [
+                    { "recordingSegment": 0, "timescale": 1.0, "start": 1.5, "end": 9.25 }
+                ],
+                "zoomSegments": []
+            }
+        }));
+        assert!(paths.is_empty(), "unexpected: {paths:?}");
+    }
+
+    #[test]
+    fn integer_for_float_field_passes() {
+        let paths = dropped(json!({
+            "timeline": {
+                "segments": [{ "recordingSegment": 0, "timescale": 1, "start": 0, "end": 10 }],
+                "zoomSegments": []
+            }
+        }));
+        assert!(paths.is_empty(), "unexpected: {paths:?}");
+    }
+
+    #[test]
+    fn null_and_empty_inputs_are_not_reported() {
+        let paths = dropped(json!({ "timeline": null }));
+        assert!(paths.is_empty(), "unexpected: {paths:?}");
     }
 }

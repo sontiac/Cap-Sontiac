@@ -249,12 +249,19 @@ fn build() -> Guide {
                 OutputMode::AlwaysJson,
                 &[],
             ),
-            cmd(
-                "project config get|set",
-                "Read/replace a project's editor configuration (project-config.json).",
-                OutputMode::SingleJson,
-                &[],
-            ),
+            CommandDoc {
+                notes: Some(
+                    "set is strict: submitted fields that this Cap version would silently drop abort the \
+                     write and are listed as JSON paths. Omitted fields reset to defaults — always start \
+                     from `config get` output when editing.",
+                ),
+                ..cmd(
+                    "project config get|set",
+                    "Read/replace a project's editor configuration (project-config.json).",
+                    OutputMode::SingleJson,
+                    &[],
+                )
+            },
             cmd(
                 "version",
                 "CLI version + execution context (distribution, bundled binaries).",

@@ -616,3 +616,26 @@ fn write_single_segment_meta(project: &Path) {
     )
     .unwrap();
 }
+
+#[test]
+fn config_set_rejects_unknown_fields() {
+    let dir = tempfile::tempdir().unwrap();
+    let output = run(&[
+        "project",
+        "config",
+        "set",
+        dir.path().to_str().unwrap(),
+        "--settings-json",
+        r#"{ "timeline": { "segments": [], "zoomSegments": [], "segemnts": [] } }"#,
+        "--format",
+        "json",
+    ]);
+    assert_eq!(output.status.code(), Some(1));
+    let event = parse_json(&output);
+    assert!(
+        event["error"]
+            .as_str()
+            .unwrap()
+            .contains("$.timeline.segemnts")
+    );
+}
