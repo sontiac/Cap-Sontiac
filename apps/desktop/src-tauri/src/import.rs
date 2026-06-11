@@ -20,7 +20,6 @@ use tauri_specta::Event;
 use tracing::{debug, error, info};
 
 use crate::{
-    create_screenshot,
     editor_window::EditorInstances,
     windows::{CapWindowId, EditorWindowIds},
 };
@@ -59,18 +58,6 @@ fn emit_progress(
 
 fn check_project_exists(project_path: &Path) -> bool {
     project_path.exists() && project_path.join("recording-meta.json").exists()
-}
-
-fn generate_project_name(source_path: &Path) -> String {
-    let stem = source_path
-        .file_stem()
-        .and_then(|s| s.to_str())
-        .unwrap_or("Imported Video");
-
-    let now = chrono::Local::now();
-    let date_str = now.format("%Y-%m-%d at %H.%M.%S").to_string();
-
-    format!("{stem} {date_str}")
 }
 
 fn generate_image_project_name(source_path: &Path) -> String {
@@ -984,225 +971,39 @@ pub async fn start_video_import(app: AppHandle, source_path: PathBuf) -> Result<
         .map_err(|e| e.to_string())?
         .join("recordings");
 
-    let project_name = generate_project_name(&source_path);
-    let sanitized_name = sanitize_filename(&project_name);
-    let project_dir_name = format!("{sanitized_name}.cap");
-
-    let mut project_path = recordings_dir.join(&project_dir_name);
-    let mut counter = 1;
-    while project_path.exists() {
-        let new_name = format!("{sanitized_name} ({counter}).cap");
-        project_path = recordings_dir.join(new_name);
-        counter += 1;
-    }
-
-    let project_path_str = project_path.to_string_lossy().to_string();
-
-    emit_progress(
-        &app,
-        &project_path_str,
-        ImportStage::Probing,
-        0.0,
-        "Analyzing video file...",
-    );
-
-    let can_decode =
-        probe_video_can_decode(&source_path).map_err(|e| format!("Cannot decode video: {e}"))?;
-
+    let can_decode = cap_enc_ffmpeg::remux::probe_video_can_decode(&source_path)
+        .map_err(|e| format!("Cannot decode video: {e}"))?;
     if !can_decode {
-        emit_progress(
-            &app,
-            &project_path_str,
-            ImportStage::Failed,
-            0.0,
-            "Video format not supported",
-        );
         return Err("Video format not supported or file is corrupted".to_string());
     }
 
-    std::fs::create_dir_all(&project_path).map_err(|e| e.to_string())?;
-
-    let segment_dir = project_path
-        .join("content")
-        .join("segments")
-        .join("segment-0");
-    std::fs::create_dir_all(&segment_dir).map_err(|e| e.to_string())?;
-
-    let output_video_path = segment_dir.join("display.mp4");
-    let output_audio_path = segment_dir.join("audio.ogg");
-
-    let initial_meta = RecordingMeta {
-        platform: Some(Platform::default()),
-        project_path: project_path.clone(),
-        pretty_name: project_name.clone(),
-        sharing: None,
-        inner: RecordingMetaInner::Studio(Box::new(StudioRecordingMeta::MultipleSegments {
-            inner: MultipleSegments {
-                segments: vec![MultipleSegment {
-                    display: VideoMeta {
-                        path: RelativePathBuf::from("content/segments/segment-0/display.mp4"),
-                        fps: 30,
-                        start_time: Some(0.0),
-                        device_id: None,
-                    },
-                    camera: None,
-                    mic: None,
-                    system_audio: None,
-                    cursor: None,
-                    keyboard: None,
-                }],
-                cursors: Cursors::default(),
-                status: Some(StudioRecordingStatus::InProgress),
-            },
-        })),
-        upload: None,
-    };
-
-    initial_meta
-        .save_for_project()
-        .map_err(|e| format!("Failed to save initial metadata: {e:?}"))?;
-
-    emit_progress(
-        &app,
-        &project_path_str,
-        ImportStage::Converting,
-        0.0,
-        "Starting conversion...",
-    );
-
+    let (project_path, project_name) =
+        cap_video_import::unique_project_path(&recordings_dir, &source_path);
+    let project_path_str = project_path.to_string_lossy().to_string();
     let return_path = project_path.clone();
 
     tokio::spawn(async move {
-        let app_clone = app.clone();
-        let project_path_str_clone = project_path_str.clone();
-        let source_path_clone = source_path.clone();
-        let output_path_clone = output_video_path.clone();
-        let audio_path_clone = output_audio_path.clone();
-        let project_path_clone = project_path.clone();
-
-        if !check_project_exists(&project_path) {
-            info!("Import aborted before start: project directory missing");
-            return;
-        }
-
+        let app_for_progress = app.clone();
+        let progress_path = project_path_str.clone();
         let result = tokio::task::spawn_blocking(move || {
-            transcode_video(
-                &source_path_clone,
-                &output_path_clone,
-                Some(&audio_path_clone),
-                |progress| {
-                    emit_progress(
-                        &app_clone,
-                        &project_path_str_clone,
-                        ImportStage::Converting,
-                        progress,
-                        &format!("Converting video... {}%", (progress * 100.0) as u32),
-                    )
+            cap_video_import::import_video(
+                &source_path,
+                &project_path,
+                &project_name,
+                |stage, progress, message| {
+                    emit_progress(&app_for_progress, &progress_path, stage, progress, message)
                 },
-                || !check_project_exists(&project_path_clone),
             )
         })
         .await;
 
         match result {
-            Ok(Ok(TranscodeOutput { fps, sample_rate })) => {
-                emit_progress(
-                    &app,
-                    &project_path_str,
-                    ImportStage::Finalizing,
-                    0.95,
-                    "Creating project metadata...",
-                );
-
-                let audio_file_size = std::fs::metadata(&output_audio_path)
-                    .map(|m| m.len())
-                    .unwrap_or(0);
-                const MIN_VALID_AUDIO_SIZE: u64 = 1000;
-                let system_audio =
-                    if sample_rate.is_some() && audio_file_size > MIN_VALID_AUDIO_SIZE {
-                        Some(AudioMeta {
-                            path: RelativePathBuf::from("content/segments/segment-0/audio.ogg"),
-                            start_time: Some(0.0),
-                            device_id: None,
-                            gap_summary: None,
-                        })
-                    } else {
-                        None
-                    };
-
-                let meta = RecordingMeta {
-                    platform: Some(Platform::default()),
-                    project_path: project_path.clone(),
-                    pretty_name: project_name,
-                    sharing: None,
-                    inner: RecordingMetaInner::Studio(Box::new(
-                        StudioRecordingMeta::MultipleSegments {
-                            inner: MultipleSegments {
-                                segments: vec![MultipleSegment {
-                                    display: VideoMeta {
-                                        path: RelativePathBuf::from(
-                                            "content/segments/segment-0/display.mp4",
-                                        ),
-                                        fps,
-                                        start_time: Some(0.0),
-                                        device_id: None,
-                                    },
-                                    camera: None,
-                                    mic: None,
-                                    system_audio,
-                                    cursor: None,
-                                    keyboard: None,
-                                }],
-                                cursors: Cursors::default(),
-                                status: Some(StudioRecordingStatus::Complete),
-                            },
-                        },
-                    )),
-                    upload: None,
-                };
-
-                if let Err(e) = meta.save_for_project() {
-                    error!("Failed to save metadata: {:?}", e);
-                    emit_progress(
-                        &app,
-                        &project_path_str,
-                        ImportStage::Failed,
-                        0.0,
-                        &format!("Failed to save metadata: {e:?}"),
-                    );
-                    return;
-                }
-
-                let screenshots_dir = project_path.join("screenshots");
-                if let Err(e) = std::fs::create_dir_all(&screenshots_dir) {
-                    error!("Failed to create screenshots directory: {:?}", e);
-                } else {
-                    let display_screenshot = screenshots_dir.join("display.jpg");
-                    let video_path = output_video_path.clone();
-                    tokio::spawn(async move {
-                        if let Err(e) =
-                            create_screenshot(video_path, display_screenshot, None).await
-                        {
-                            error!("Failed to create thumbnail for imported video: {}", e);
-                        }
-                    });
-                }
-
-                emit_progress(
-                    &app,
-                    &project_path_str,
-                    ImportStage::Complete,
-                    1.0,
-                    "Import complete!",
-                );
-
-                info!("Video import complete: {:?}", project_path);
-            }
+            Ok(Ok(_)) => {}
             Ok(Err(ImportError::Cancelled)) => {
-                info!("Video import cancelled: {:?}", project_path);
+                info!("Video import cancelled");
             }
             Ok(Err(e)) => {
-                error!("Transcoding failed: {}", e);
+                error!("Video import failed: {e}");
                 emit_progress(
                     &app,
                     &project_path_str,
@@ -1212,13 +1013,13 @@ pub async fn start_video_import(app: AppHandle, source_path: PathBuf) -> Result<
                 );
             }
             Err(e) => {
-                error!("Transcoding task panicked: {}", e);
+                error!("Video import task panicked: {e}");
                 emit_progress(
                     &app,
                     &project_path_str,
                     ImportStage::Failed,
                     0.0,
-                    &format!("Transcoding task failed: {e}"),
+                    &format!("Import task failed: {e}"),
                 );
             }
         }

@@ -1864,6 +1864,7 @@ dependencies = [
  "cap-enc-ffmpeg",
  "cap-media-info",
  "cap-project",
+ "chrono",
  "ffmpeg-next",
  "image 0.25.8",
  "relative-path",
