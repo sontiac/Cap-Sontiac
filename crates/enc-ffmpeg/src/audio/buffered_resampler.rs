@@ -14,6 +14,10 @@ pub struct BufferedResampler {
     sample_index: usize,
     // used to account for cases where pts is rounded down instead of up
     min_next_pts: Option<i64>,
+    // end pts of the last buffered frame; scaled input pts can truncate to just
+    // before it, and the buffer must stay non-overlapping (remaining_samples and
+    // get_frame_inner treat inter-frame deltas as non-negative gaps)
+    next_output_pts: Option<i64>,
 }
 
 impl BufferedResampler {
@@ -28,6 +32,7 @@ impl BufferedResampler {
             buffer: VecDeque::new(),
             sample_index: 0,
             min_next_pts: None,
+            next_output_pts: None,
         })
     }
 
@@ -68,8 +73,9 @@ impl BufferedResampler {
 
         self.resampler.run(&frame, &mut resampled_frame).unwrap();
 
-        let resampled_pts =
-            (pts as f64 * (resampled_frame.rate() as f64 / frame.rate() as f64)) as i64;
+        let resampled_pts = ((pts as f64 * (resampled_frame.rate() as f64 / frame.rate() as f64))
+            as i64)
+            .max(self.next_output_pts.unwrap_or(i64::MIN));
 
         let mut next_pts = resampled_pts + resampled_frame.samples() as i64;
 
@@ -93,6 +99,7 @@ impl BufferedResampler {
         }
 
         self.min_next_pts = Some(pts + frame.samples() as i64);
+        self.next_output_pts = Some(next_pts);
     }
 
     fn get_frame_inner(&mut self, samples: usize) -> Option<ffmpeg::frame::Audio> {
@@ -350,6 +357,38 @@ mod test {
 
             let last = bufferer.buffer.back().unwrap();
             assert_eq!(last.1 + last.0.samples() as i64, 600);
+        }
+
+        #[test]
+        fn fractional_rate_conversion_never_overlaps_or_panics() {
+            let mut bufferer = BufferedResampler::new(
+                AudioInfo::new_raw(format::Sample::U8(cap_media_info::Type::Packed), 44100, 1),
+                AudioInfo::new_raw(format::Sample::U8(cap_media_info::Type::Packed), 48000, 1),
+            )
+            .unwrap();
+
+            for i in 0..20 {
+                let mut frame = ffmpeg::frame::Audio::new(
+                    cap_media_info::Sample::U8(cap_media_info::Type::Packed),
+                    1024,
+                    ChannelLayout::MONO,
+                );
+                frame.data_mut(0).fill(69);
+                frame.set_rate(44100);
+                frame.set_pts(Some(i * 1024));
+
+                bufferer.add_frame(frame);
+                bufferer.remaining_samples();
+            }
+
+            let mut prev_end = i64::MIN;
+            for (frame, pts) in bufferer.buffer.iter() {
+                assert!(
+                    *pts >= prev_end,
+                    "buffered frame at pts {pts} overlaps previous frame ending at {prev_end}"
+                );
+                prev_end = pts + frame.samples() as i64;
+            }
         }
     }
 
