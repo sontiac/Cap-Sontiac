@@ -70,7 +70,7 @@ impl ImportArgs {
 
         if json {
             let _ = write_json_line(&ImportEvent::Progress {
-                stage: "probing",
+                stage: stage_name(ImportStage::Probing),
                 progress: 0.0,
             });
         } else {

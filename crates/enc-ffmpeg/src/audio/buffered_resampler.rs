@@ -389,6 +389,12 @@ mod test {
                 );
                 prev_end = pts + frame.samples() as i64;
             }
+
+            let expected_end = (20.0 * 1024.0 * 48000.0 / 44100.0) as i64;
+            assert!(
+                (prev_end - expected_end).abs() <= 64,
+                "clamp drifted output end to {prev_end}, expected ~{expected_end}"
+            );
         }
     }
 
