@@ -1,0 +1,23 @@
+[package]
+name = "cap-video-import"
+version = "0.1.0"
+edition = "2024"
+
+[lints]
+workspace = true
+
+[dependencies]
+cap-enc-ffmpeg = { path = "../enc-ffmpeg" }
+cap-media-info = { path = "../media-info" }
+cap-project = { path = "../project" }
+ffmpeg = { workspace = true }
+image = "0.25.2"
+relative-path = { version = "1.9.3", features = ["serde"] }
+serde = { workspace = true }
+specta = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+workspace-hack = { version = "0.1", path = "../workspace-hack" }
+
+[dev-dependencies]
+tempfile = "3"

@@ -1857,6 +1857,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "cap-video-import"
+version = "0.1.0"
+dependencies = [
+ "cap-enc-ffmpeg",
+ "cap-media-info",
+ "cap-project",
+ "ffmpeg-next",
+ "image 0.25.8",
+ "relative-path",
+ "serde",
+ "specta",
+ "tempfile",
+ "thiserror 1.0.69",
+ "tracing",
+ "workspace-hack",
+]
+
+[[package]]
 name = "cargo-platform"
 version = "0.1.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
