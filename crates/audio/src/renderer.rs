@@ -96,6 +96,67 @@ pub fn render_audio(
     samples
 }
 
+pub struct SfxFrameTrack<'a> {
+    pub data: &'a AudioData,
+    pub start_sample: usize,
+    pub end_sample: usize,
+    pub volume: f32,
+}
+
+pub fn mix_sfx_frame(
+    sfx: &[SfxFrameTrack],
+    frame_start: usize,
+    frame_samples: usize,
+    out: &mut [f32],
+) {
+    let frame_end = frame_start + frame_samples;
+
+    for track in sfx {
+        let data = track.data;
+        let channels = data.channels();
+        if channels != 1 && channels != 2 {
+            continue;
+        }
+
+        let effective_end = track
+            .end_sample
+            .min(track.start_sample.saturating_add(data.sample_count()));
+        let range_start = track.start_sample.max(frame_start);
+        let range_end = effective_end.min(frame_end);
+        if range_start >= range_end {
+            continue;
+        }
+
+        let samples = data.samples();
+        for pos in range_start..range_end {
+            let i = pos - frame_start;
+            let src = pos - track.start_sample;
+
+            if channels == 1 {
+                let Some(sample) = samples.get(src) else {
+                    continue;
+                };
+                let contribution = sample * 0.707 * track.volume;
+                out[i * 2] += contribution;
+                out[i * 2 + 1] += contribution;
+            } else {
+                let Some(l_sample) = samples.get(src * 2) else {
+                    continue;
+                };
+                let Some(r_sample) = samples.get(src * 2 + 1) else {
+                    continue;
+                };
+                out[i * 2] += l_sample * track.volume;
+                out[i * 2 + 1] += r_sample * track.volume;
+            }
+        }
+    }
+
+    for value in out.iter_mut() {
+        *value = value.clamp(-1.0, 1.0);
+    }
+}
+
 fn gain_for_db(db: f32) -> f32 {
     match db {
         // Fully mute when at minimum
@@ -187,5 +248,147 @@ mod tests {
         // Frames 4..10: short track exhausted -> contributes silence, long track remains.
         assert!((out[4 * 2] - 0.5).abs() < 1e-6);
         assert!((out[9 * 2] - 0.5).abs() < 1e-6);
+    }
+
+    fn sfx(
+        data: &AudioData,
+        start_sample: usize,
+        end_sample: usize,
+        volume: f32,
+    ) -> SfxFrameTrack<'_> {
+        SfxFrameTrack {
+            data,
+            start_sample,
+            end_sample,
+            volume,
+        }
+    }
+
+    #[test]
+    fn mix_sfx_mono_inside_frame() {
+        let data = AudioData::from_raw_f32(vec![0.1, 0.2, 0.3, 0.4], 1);
+        let mut out = vec![0.0; 8 * 2];
+        let volume = 0.5;
+        mix_sfx_frame(&[sfx(&data, 2, 6, volume)], 0, 8, &mut out);
+
+        for i in 0..8 {
+            let l = out[i * 2];
+            let r = out[i * 2 + 1];
+            if (2..6).contains(&i) {
+                let expected = data.samples()[i - 2] * 0.707 * volume;
+                assert!((l - expected).abs() < 1e-6, "left {i}");
+                assert!((r - expected).abs() < 1e-6, "right {i}");
+            } else {
+                assert_eq!(l, 0.0, "left silent {i}");
+                assert_eq!(r, 0.0, "right silent {i}");
+            }
+        }
+    }
+
+    #[test]
+    fn mix_sfx_stereo_channels_and_volume() {
+        let data = AudioData::from_raw_f32(vec![0.1, -0.1, 0.2, -0.2, 0.3, -0.3], 2);
+        let mut out = vec![0.0; 6 * 2];
+        let volume = 0.5;
+        mix_sfx_frame(&[sfx(&data, 1, 4, volume)], 0, 6, &mut out);
+
+        for i in 0..6 {
+            let l = out[i * 2];
+            let r = out[i * 2 + 1];
+            if (1..4).contains(&i) {
+                let src = i - 1;
+                let expected_l = data.samples()[src * 2] * volume;
+                let expected_r = data.samples()[src * 2 + 1] * volume;
+                assert!((l - expected_l).abs() < 1e-6, "left {i}");
+                assert!((r - expected_r).abs() < 1e-6, "right {i}");
+            } else {
+                assert_eq!(l, 0.0, "left silent {i}");
+                assert_eq!(r, 0.0, "right silent {i}");
+            }
+        }
+    }
+
+    #[test]
+    fn mix_sfx_zero_volume_is_noop() {
+        let data = AudioData::from_raw_f32(vec![0.5, 0.5, 0.5, 0.5], 1);
+        let mut out = vec![0.3; 8 * 2];
+        mix_sfx_frame(&[sfx(&data, 1, 5, 0.0)], 0, 8, &mut out);
+
+        for v in &out {
+            assert!((v - 0.3).abs() < 1e-6);
+        }
+    }
+
+    #[test]
+    fn mix_sfx_started_before_frame_reads_intra_file_offset() {
+        let data = AudioData::from_raw_f32(vec![0.1, 0.2, 0.3, 0.4, 0.5, 0.6], 1);
+        let mut out = vec![0.0; 4 * 2];
+        let volume = 1.0;
+        mix_sfx_frame(&[sfx(&data, 2, 10, volume)], 4, 4, &mut out);
+
+        for i in 0..4 {
+            let pos = 4 + i;
+            let src = pos - 2;
+            let expected = data.samples()[src] * 0.707 * volume;
+            assert!((out[i * 2] - expected).abs() < 1e-6, "left {i}");
+            assert!((out[i * 2 + 1] - expected).abs() < 1e-6, "right {i}");
+        }
+    }
+
+    #[test]
+    fn mix_sfx_trim_by_end_sample() {
+        let data = AudioData::from_raw_f32(vec![0.1, 0.2, 0.3, 0.4, 0.5, 0.6], 1);
+        let mut out = vec![0.0; 8 * 2];
+        let volume = 1.0;
+        mix_sfx_frame(&[sfx(&data, 1, 4, volume)], 0, 8, &mut out);
+
+        for i in 0..8 {
+            if (1..4).contains(&i) {
+                let expected = data.samples()[i - 1] * 0.707 * volume;
+                assert!((out[i * 2] - expected).abs() < 1e-6, "active {i}");
+            } else {
+                assert_eq!(out[i * 2], 0.0, "trimmed {i}");
+            }
+        }
+    }
+
+    #[test]
+    fn mix_sfx_file_shorter_than_segment_is_silent_past_file() {
+        let data = AudioData::from_raw_f32(vec![0.1, 0.2], 1);
+        let mut out = vec![0.0; 8 * 2];
+        let volume = 1.0;
+        mix_sfx_frame(&[sfx(&data, 1, 7, volume)], 0, 8, &mut out);
+
+        for i in 0..8 {
+            if (1..3).contains(&i) {
+                let expected = data.samples()[i - 1] * 0.707 * volume;
+                assert!((out[i * 2] - expected).abs() < 1e-6, "active {i}");
+            } else {
+                assert_eq!(out[i * 2], 0.0, "past file {i}");
+            }
+        }
+    }
+
+    #[test]
+    fn mix_sfx_clamps_to_unit_range() {
+        let data = AudioData::from_raw_f32(vec![0.9, 0.9], 1);
+        let mut out = vec![0.8; 2 * 2];
+        mix_sfx_frame(&[sfx(&data, 0, 2, 1.0)], 0, 2, &mut out);
+
+        for i in 0..2 {
+            assert!(0.8 + data.samples()[i] * 0.707 > 1.0);
+            assert!((out[i * 2] - 1.0).abs() < 1e-6, "left clamp {i}");
+            assert!((out[i * 2 + 1] - 1.0).abs() < 1e-6, "right clamp {i}");
+        }
+    }
+
+    #[test]
+    fn mix_sfx_empty_slice_leaves_out_untouched() {
+        let mut out = vec![0.42; 4 * 2];
+        mix_sfx_frame(&[], 0, 4, &mut out);
+
+        for v in &out {
+            assert!((v - 0.42).abs() < 1e-6);
+        }
     }
 }
