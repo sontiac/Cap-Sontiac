@@ -1726,11 +1726,13 @@ impl AudioPlayback {
         } else {
             let mut project_rx_local = project.clone();
             let project_snapshot = project_rx_local.borrow_and_update().clone();
+            let mut sfx_cache = crate::sfx::SfxCache::default();
             let samples = render_prerendered_samples::<T>(
                 segments,
                 &project_snapshot,
                 output_info,
                 duration_secs,
+                &mut sfx_cache,
             );
             let samples_arc = Arc::new(samples);
             let project_changed_during_render = project_rx_local.has_changed().unwrap_or(false);

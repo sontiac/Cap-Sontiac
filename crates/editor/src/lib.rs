@@ -3,6 +3,7 @@ mod editor;
 mod editor_instance;
 mod playback;
 mod segments;
+mod sfx;
 mod telemetry;
 
 pub use audio::{AudioCacheState, AudioRenderer};
@@ -13,6 +14,7 @@ pub use editor::{
 pub use editor_instance::{EditorInstance, EditorState, SegmentMedia, create_segments};
 pub use playback::{AudioCacheSlot, Playback, PlaybackEvent, PlaybackHandle, PlaybackStartError};
 pub use segments::get_audio_segments;
+pub use sfx::{SfxCache, SfxTrack};
 pub use telemetry::{
     PlaybackFrameSource, PlaybackRenderOutputFormat, PlaybackSkipReason, PlaybackTelemetry,
     PlaybackTelemetryEvent,

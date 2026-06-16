@@ -21,6 +21,7 @@ pub struct AudioRenderer {
     // sum of `frame.samples()` that have elapsed
     // this * channel count = cursor
     elapsed_samples: usize,
+    sfx: Vec<crate::sfx::SfxTrack>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -108,7 +109,13 @@ impl AudioRenderer {
                 timescale: 1.0,
             },
             elapsed_samples: 0,
+            sfx: Vec::new(),
         }
+    }
+
+    pub fn with_sfx(mut self, sfx: Vec<crate::sfx::SfxTrack>) -> Self {
+        self.sfx = sfx;
+        self
     }
 
     pub fn set_playhead(&mut self, playhead: f64, project: &ProjectConfiguration) {
@@ -175,6 +182,7 @@ impl AudioRenderer {
             return None;
         }
 
+        let frame_start = self.elapsed_samples;
         let mut ret = vec![0.0; samples * 2];
         let mut written = 0usize;
 
@@ -208,6 +216,19 @@ impl AudioRenderer {
             None
         } else {
             ret.truncate(written * 2);
+            if !self.sfx.is_empty() {
+                let frame_tracks: Vec<cap_audio::SfxFrameTrack> = self
+                    .sfx
+                    .iter()
+                    .map(|t| cap_audio::SfxFrameTrack {
+                        data: t.data.as_ref(),
+                        start_sample: t.start_sample,
+                        end_sample: t.end_sample,
+                        volume: t.volume,
+                    })
+                    .collect();
+                cap_audio::mix_sfx_frame(&frame_tracks, frame_start, written, &mut ret);
+            }
             Some((written, ret))
         }
     }
@@ -220,6 +241,8 @@ impl AudioRenderer {
         if samples == 0 {
             return None;
         }
+
+        let frame_start = self.elapsed_samples;
 
         if self.cursor.timescale != 1.0 {
             self.elapsed_samples += samples;
@@ -237,6 +260,20 @@ impl AudioRenderer {
         self.elapsed_samples += rendered;
         self.cursor.samples += rendered;
         ret.truncate(rendered * 2);
+
+        if !self.sfx.is_empty() {
+            let frame_tracks: Vec<cap_audio::SfxFrameTrack> = self
+                .sfx
+                .iter()
+                .map(|t| cap_audio::SfxFrameTrack {
+                    data: t.data.as_ref(),
+                    start_sample: t.start_sample,
+                    end_sample: t.end_sample,
+                    volume: t.volume,
+                })
+                .collect();
+            cap_audio::mix_sfx_frame(&frame_tracks, frame_start, rendered, &mut ret);
+        }
 
         Some((rendered, ret))
     }
@@ -536,6 +573,7 @@ pub fn render_prerendered_samples<T: FromSampleBytes>(
     project: &ProjectConfiguration,
     output_info: AudioInfo,
     duration_secs: f64,
+    sfx_cache: &mut crate::sfx::SfxCache,
 ) -> Vec<T> {
     let output_info = output_info.for_ffmpeg_output();
 
@@ -546,7 +584,14 @@ pub fn render_prerendered_samples<T: FromSampleBytes>(
         "Pre-rendering audio for playback"
     );
 
-    let mut renderer = AudioRenderer::new(segments);
+    let sfx = sfx_cache.resolve(
+        project
+            .timeline
+            .as_ref()
+            .map(|t| t.sfx_segments.as_slice())
+            .unwrap_or(&[]),
+    );
+    let mut renderer = AudioRenderer::new(segments).with_sfx(sfx);
     let mut resampler = AudioResampler::new(output_info).unwrap();
 
     let total_source_samples = (duration_secs * AudioData::SAMPLE_RATE as f64) as usize;
@@ -1104,12 +1149,14 @@ mod tests {
         let export_stream = render_export_audio(&mut export_renderer, &project, 30, 3 * 30);
 
         let output_info = AudioRenderer::info();
+        let mut sfx_cache = crate::sfx::SfxCache::default();
         let mut playback_buffer = PrerenderedAudioBuffer::from_samples(
             Arc::new(render_prerendered_samples::<f32>(
                 segments,
                 &project,
                 output_info,
                 3.0,
+                &mut sfx_cache,
             )),
             output_info,
         );
