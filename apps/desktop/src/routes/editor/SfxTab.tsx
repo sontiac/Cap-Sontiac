@@ -43,13 +43,12 @@ async function listSfxFiles(): Promise<SfxFile[]> {
 		.map((e) => ({ name: e.name, path: `${dir}/${e.name}` }));
 }
 
-async function seedAndListSfxFiles(): Promise<SfxFile[]> {
+async function seedDefaultSfx(): Promise<void> {
 	try {
 		await commands.seedSoundEffects();
 	} catch (err) {
 		console.error("Failed to seed default SFX:", err);
 	}
-	return listSfxFiles();
 }
 
 function previewSfx(file: SfxFile) {
@@ -59,7 +58,19 @@ function previewSfx(file: SfxFile) {
 
 export function SfxTab() {
 	const { project, setProject, editorState } = useEditorContext();
-	const [files, { refetch }] = createResource(seedAndListSfxFiles, {
+	// Seed the bundled default pack once, before the first listing, so the
+	// defaults appear on first open with no flash of the empty state. Plain
+	// Refresh (refetch) afterwards only re-scans the folder — a deleted default
+	// stays gone until the user explicitly clicks Restore.
+	let hasSeeded = false;
+	const seedOnceThenList = async (): Promise<SfxFile[]> => {
+		if (!hasSeeded) {
+			hasSeeded = true;
+			await seedDefaultSfx();
+		}
+		return listSfxFiles();
+	};
+	const [files, { refetch }] = createResource(seedOnceThenList, {
 		initialValue: [],
 	});
 
@@ -94,11 +105,7 @@ export function SfxTab() {
 	};
 
 	const restoreDefaults = async () => {
-		try {
-			await commands.seedSoundEffects();
-		} catch (err) {
-			console.error("Failed to restore default SFX:", err);
-		}
+		await seedDefaultSfx();
 		refetch();
 	};
 
