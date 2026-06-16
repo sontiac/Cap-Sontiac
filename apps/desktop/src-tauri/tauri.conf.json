@@ -57,6 +57,7 @@
 			"assets/backgrounds/dark/*": "assets/backgrounds/dark/",
 			"assets/backgrounds/orange/*": "assets/backgrounds/orange/",
 			"assets/backgrounds/purple/*": "assets/backgrounds/purple/",
+			"assets/sound_effects/*": "assets/sound_effects/",
 			"../src/assets/rive/*.riv": "assets/rive/"
 		},
 		"macOS": {
