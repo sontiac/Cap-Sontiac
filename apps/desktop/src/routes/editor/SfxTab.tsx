@@ -7,6 +7,7 @@ import { createResource, For, Show } from "solid-js";
 import { commands } from "~/utils/tauri";
 import IconLucideFolderOpen from "~icons/lucide/folder-open";
 import IconLucideRefreshCw from "~icons/lucide/refresh-cw";
+import IconLucideRotateCcw from "~icons/lucide/rotate-ccw";
 import { serializeProjectConfiguration, useEditorContext } from "./context";
 
 const SFX_FOLDER = "sound_effects";
@@ -42,6 +43,15 @@ async function listSfxFiles(): Promise<SfxFile[]> {
 		.map((e) => ({ name: e.name, path: `${dir}/${e.name}` }));
 }
 
+async function seedAndListSfxFiles(): Promise<SfxFile[]> {
+	try {
+		await commands.seedSoundEffects();
+	} catch (err) {
+		console.error("Failed to seed default SFX:", err);
+	}
+	return listSfxFiles();
+}
+
 function previewSfx(file: SfxFile) {
 	const audio = new Audio(convertFileSrc(file.path));
 	audio.play().catch((err) => console.error("Failed to preview SFX:", err));
@@ -49,7 +59,7 @@ function previewSfx(file: SfxFile) {
 
 export function SfxTab() {
 	const { project, setProject, editorState } = useEditorContext();
-	const [files, { refetch }] = createResource(listSfxFiles, {
+	const [files, { refetch }] = createResource(seedAndListSfxFiles, {
 		initialValue: [],
 	});
 
@@ -83,11 +93,29 @@ export function SfxTab() {
 		await shell.open(dir);
 	};
 
+	const restoreDefaults = async () => {
+		try {
+			await commands.seedSoundEffects();
+		} catch (err) {
+			console.error("Failed to restore default SFX:", err);
+		}
+		refetch();
+	};
+
 	return (
 		<div class="flex flex-col gap-3">
 			<div class="flex items-center justify-between">
 				<h3 class="text-sm font-medium text-gray-12">Sound effects</h3>
 				<div class="flex gap-1">
+					<button
+						type="button"
+						onClick={restoreDefaults}
+						class="p-1 rounded hover:bg-gray-3 text-gray-11 hover:text-gray-12"
+						aria-label="Restore default sounds"
+						title="Restore default sounds"
+					>
+						<IconLucideRotateCcw class="size-4" />
+					</button>
 					<button
 						type="button"
 						onClick={() => refetch()}
