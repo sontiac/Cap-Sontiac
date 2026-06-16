@@ -391,4 +391,26 @@ mod tests {
             assert!((v - 0.42).abs() < 1e-6);
         }
     }
+
+    #[test]
+    fn mix_sfx_reverse_range_is_noop() {
+        let data = AudioData::from_raw_f32(vec![0.1, 0.2, 0.3, 0.4, 0.5, 0.6], 1);
+        let mut out = vec![0.3; 8 * 2];
+        mix_sfx_frame(&[sfx(&data, 6, 2, 1.0)], 0, 8, &mut out);
+
+        for v in &out {
+            assert!((v - 0.3).abs() < 1e-6);
+        }
+    }
+
+    #[test]
+    fn mix_sfx_entirely_outside_frame_is_noop() {
+        let data = AudioData::from_raw_f32(vec![0.1, 0.2, 0.3, 0.4], 1);
+        let mut out = vec![0.3; 8 * 2];
+        mix_sfx_frame(&[sfx(&data, 100, 110, 1.0)], 0, 8, &mut out);
+
+        for v in &out {
+            assert!((v - 0.3).abs() < 1e-6);
+        }
+    }
 }
