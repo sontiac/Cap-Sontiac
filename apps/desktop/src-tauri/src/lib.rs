@@ -4147,6 +4147,7 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
             import::add_existing_recording_to_editor,
             import::start_image_import,
             import::check_import_ready,
+            sfx::seed_sound_effects,
             copy_file_to_path,
             copy_video_to_clipboard,
             copy_screenshot_to_clipboard,
