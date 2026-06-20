@@ -4,6 +4,7 @@ use crate::audio::{
 use crate::editor;
 use crate::playback::{self, AudioCacheSlot, PlaybackHandle, PlaybackStartError};
 use crate::segments::get_audio_segments;
+use crate::sfx::SfxCache;
 use cap_audio::AudioData;
 use cap_media_info::{AudioInfo, Sample, Type};
 use cap_project::StudioRecordingMeta;
@@ -990,6 +991,8 @@ async fn audio_cache_loop(
 ) {
     project_rx.borrow_and_update();
 
+    let mut sfx_cache = SfxCache::default();
+
     loop {
         if project_rx.changed().await.is_err() {
             return;
@@ -1029,16 +1032,29 @@ async fn audio_cache_loop(
         let render_segments = segments.clone();
         let render_project = project.clone();
 
-        let entry_result = tokio::task::spawn_blocking(move || {
-            render_audio_cache_entry(render_segments, &render_project, output_info, duration_secs)
+        let task_result = tokio::task::spawn_blocking(move || {
+            let entry = render_audio_cache_entry(
+                render_segments,
+                &render_project,
+                output_info,
+                duration_secs,
+                &mut sfx_cache,
+            );
+            (entry, sfx_cache)
         })
         .await;
 
-        let entry = match entry_result {
-            Ok(Some(entry)) => entry,
-            Ok(None) => continue,
+        let entry = match task_result {
+            Ok((entry, returned_cache)) => {
+                sfx_cache = returned_cache;
+                match entry {
+                    Some(entry) => entry,
+                    None => continue,
+                }
+            }
             Err(e) => {
                 warn!("audio cache render task failed: {e}");
+                sfx_cache = SfxCache::default();
                 continue;
             }
         };
@@ -1058,32 +1074,53 @@ fn render_audio_cache_entry(
     project: &ProjectConfiguration,
     output_info: AudioInfo,
     duration_secs: f64,
+    sfx_cache: &mut SfxCache,
 ) -> Option<AudioCacheEntry> {
-    let samples =
-        match output_info.sample_format {
-            Sample::U8(Type::Packed) => u8::into_cache(Arc::new(render_prerendered_samples::<u8>(
-                segments,
-                project,
-                output_info,
-                duration_secs,
-            ))),
-            Sample::I16(Type::Packed) => i16::into_cache(Arc::new(
-                render_prerendered_samples::<i16>(segments, project, output_info, duration_secs),
-            )),
-            Sample::I32(Type::Packed) => i32::into_cache(Arc::new(
-                render_prerendered_samples::<i32>(segments, project, output_info, duration_secs),
-            )),
-            Sample::I64(Type::Packed) => i64::into_cache(Arc::new(
-                render_prerendered_samples::<i64>(segments, project, output_info, duration_secs),
-            )),
-            Sample::F32(Type::Packed) => f32::into_cache(Arc::new(
-                render_prerendered_samples::<f32>(segments, project, output_info, duration_secs),
-            )),
-            Sample::F64(Type::Packed) => f64::into_cache(Arc::new(
-                render_prerendered_samples::<f64>(segments, project, output_info, duration_secs),
-            )),
-            _ => return None,
-        };
+    let samples = match output_info.sample_format {
+        Sample::U8(Type::Packed) => u8::into_cache(Arc::new(render_prerendered_samples::<u8>(
+            segments,
+            project,
+            output_info,
+            duration_secs,
+            sfx_cache,
+        ))),
+        Sample::I16(Type::Packed) => i16::into_cache(Arc::new(render_prerendered_samples::<i16>(
+            segments,
+            project,
+            output_info,
+            duration_secs,
+            sfx_cache,
+        ))),
+        Sample::I32(Type::Packed) => i32::into_cache(Arc::new(render_prerendered_samples::<i32>(
+            segments,
+            project,
+            output_info,
+            duration_secs,
+            sfx_cache,
+        ))),
+        Sample::I64(Type::Packed) => i64::into_cache(Arc::new(render_prerendered_samples::<i64>(
+            segments,
+            project,
+            output_info,
+            duration_secs,
+            sfx_cache,
+        ))),
+        Sample::F32(Type::Packed) => f32::into_cache(Arc::new(render_prerendered_samples::<f32>(
+            segments,
+            project,
+            output_info,
+            duration_secs,
+            sfx_cache,
+        ))),
+        Sample::F64(Type::Packed) => f64::into_cache(Arc::new(render_prerendered_samples::<f64>(
+            segments,
+            project,
+            output_info,
+            duration_secs,
+            sfx_cache,
+        ))),
+        _ => return None,
+    };
 
     Some(AudioCacheEntry {
         samples,

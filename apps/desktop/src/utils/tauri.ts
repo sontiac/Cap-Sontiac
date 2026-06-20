@@ -146,6 +146,13 @@ async startImageImport(sourcePath: string) : Promise<string> {
 async checkImportReady(projectPath: string) : Promise<boolean> {
     return await TAURI_INVOKE("check_import_ready", { projectPath });
 },
+/**
+ * Seed the user's `sound_effects` folder from the bundled default pack.
+ * Copies only files that are not already present. Returns the count copied.
+ */
+async seedSoundEffects() : Promise<number> {
+    return await TAURI_INVOKE("seed_sound_effects");
+},
 async copyFileToPath(src: string, dst: string) : Promise<null> {
     return await TAURI_INVOKE("copy_file_to_path", { src, dst });
 },

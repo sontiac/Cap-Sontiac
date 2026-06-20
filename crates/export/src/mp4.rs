@@ -223,7 +223,15 @@ impl Mp4ExportSettings {
             info!("Created MP4File encoder (NV12, external conversion, export settings)");
 
             let mut audio_renderer = if has_audio {
-                Some(AudioRenderer::new(audio_segments))
+                let mut sfx_cache = cap_editor::SfxCache::default();
+                let sfx = sfx_cache.resolve(
+                    project_for_audio
+                        .timeline
+                        .as_ref()
+                        .map(|t| t.sfx_segments.as_slice())
+                        .unwrap_or(&[]),
+                );
+                Some(AudioRenderer::new(audio_segments).with_sfx(sfx))
             } else {
                 None
             };
