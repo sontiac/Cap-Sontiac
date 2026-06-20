@@ -12,8 +12,9 @@ use ringbuf::{
     HeapRb,
     traits::{Consumer, Observer, Producer},
 };
+use std::collections::HashMap;
 use std::sync::Arc;
-use tracing::info;
+use tracing::{info, warn};
 
 pub struct AudioRenderer {
     data: Vec<AudioSegment>,
@@ -21,6 +22,7 @@ pub struct AudioRenderer {
     // sum of `frame.samples()` that have elapsed
     // this * channel count = cursor
     elapsed_samples: usize,
+    stretched_cache: HashMap<(u32, u64), Arc<Vec<f32>>>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -108,6 +110,7 @@ impl AudioRenderer {
                 timescale: 1.0,
             },
             elapsed_samples: 0,
+            stretched_cache: HashMap::new(),
         }
     }
 
@@ -195,8 +198,8 @@ impl AudioRenderer {
                 samples: self.playhead_to_samples(cursor.segment_time),
             };
 
+            self.render_current_chunk(project, chunk_samples, written * 2, &mut ret);
             if cursor.segment.timescale == 1.0 {
-                self.render_current_chunk(project, chunk_samples, written * 2, &mut ret);
                 self.cursor.samples += chunk_samples;
             }
 
@@ -218,11 +221,6 @@ impl AudioRenderer {
         project: &ProjectConfiguration,
     ) -> Option<(usize, Vec<f32>)> {
         if samples == 0 {
-            return None;
-        }
-
-        if self.cursor.timescale != 1.0 {
-            self.elapsed_samples += samples;
             return None;
         }
 
@@ -269,6 +267,19 @@ impl AudioRenderer {
     }
 
     fn render_current_chunk(
+        &mut self,
+        project: &ProjectConfiguration,
+        samples: usize,
+        out_offset: usize,
+        out: &mut [f32],
+    ) -> usize {
+        if self.cursor.timescale == 1.0 {
+            return self.render_chunk_at_native_rate(project, samples, out_offset, out);
+        }
+        self.render_chunk_time_stretched(project, samples, out_offset, out)
+    }
+
+    fn render_chunk_at_native_rate(
         &self,
         project: &ProjectConfiguration,
         samples: usize,
@@ -325,6 +336,229 @@ impl AudioRenderer {
 
         cap_audio::render_audio(&track_datas, self.cursor.samples, samples, out_offset, out)
     }
+
+    fn render_chunk_time_stretched(
+        &mut self,
+        project: &ProjectConfiguration,
+        output_samples: usize,
+        out_offset: usize,
+        out: &mut [f32],
+    ) -> usize {
+        let timescale = self.cursor.timescale;
+        let clip_index = self.cursor.clip_index;
+        let source_offset = self.cursor.samples;
+
+        let stretched = match self.get_or_build_stretched(project, clip_index, timescale) {
+            Some(s) => s,
+            None => return 0,
+        };
+
+        let stretched_total_samples = stretched.len() / 2;
+        let stretched_offset = ((source_offset as f64) / timescale).floor() as usize;
+
+        if stretched_offset >= stretched_total_samples {
+            return 0;
+        }
+
+        let available = stretched_total_samples - stretched_offset;
+        let to_copy = output_samples.min(available);
+
+        let src_start = stretched_offset * 2;
+        let src_end = src_start + to_copy * 2;
+        out[out_offset..out_offset + to_copy * 2].copy_from_slice(&stretched[src_start..src_end]);
+
+        to_copy
+    }
+
+    fn get_or_build_stretched(
+        &mut self,
+        project: &ProjectConfiguration,
+        clip_index: u32,
+        timescale: f64,
+    ) -> Option<Arc<Vec<f32>>> {
+        let key = (clip_index, timescale.to_bits());
+        if let Some(existing) = self.stretched_cache.get(&key) {
+            return Some(existing.clone());
+        }
+
+        let mixed = self.render_full_clip_at_native_rate(project, clip_index)?;
+        let stretched = match stretch_audio_atempo(&mixed, timescale, Self::SAMPLE_RATE) {
+            Ok(s) => s,
+            Err(err) => {
+                warn!("Failed to time-stretch audio for clip {clip_index} at {timescale}x: {err}");
+                return None;
+            }
+        };
+
+        let arc = Arc::new(stretched);
+        self.stretched_cache.insert(key, arc.clone());
+        Some(arc)
+    }
+
+    fn render_full_clip_at_native_rate(
+        &self,
+        project: &ProjectConfiguration,
+        clip_index: u32,
+    ) -> Option<Vec<f32>> {
+        let segment = self.data.get(clip_index as usize)?;
+        let tracks = &segment.tracks;
+        if tracks.is_empty() {
+            return None;
+        }
+
+        let offsets = project
+            .clips
+            .iter()
+            .find(|c| c.index == clip_index)
+            .map(|c| c.offsets)
+            .unwrap_or_default();
+
+        let max_samples = tracks
+            .iter()
+            .map(|t| {
+                let track_offset_samples = (t.offset(&offsets) * Self::SAMPLE_RATE as f32) as isize;
+                let available = t.data().sample_count() as isize - track_offset_samples;
+                available.max(0) as usize
+            })
+            .max()
+            .unwrap_or(0);
+
+        if max_samples == 0 {
+            return None;
+        }
+
+        let track_datas = tracks
+            .iter()
+            .map(|t| AudioRendererTrack {
+                data: t.data().as_ref(),
+                gain: if project.audio.mute {
+                    f32::NEG_INFINITY
+                } else {
+                    let g = t.gain(&project.audio);
+                    if g < -30.0 { f32::NEG_INFINITY } else { g }
+                },
+                stereo_mode: t.stereo_mode(&project.audio),
+                offset: (t.offset(&offsets) * Self::SAMPLE_RATE as f32) as isize,
+            })
+            .collect::<Vec<_>>();
+
+        let mut buf = vec![0.0f32; max_samples * 2];
+        let rendered = cap_audio::render_audio(&track_datas, 0, max_samples, 0, &mut buf);
+        buf.truncate(rendered * 2);
+        Some(buf)
+    }
+}
+
+fn build_atempo_chain(timescale: f64) -> Vec<f64> {
+    if (timescale - 1.0).abs() < f64::EPSILON {
+        return vec![];
+    }
+    let mut factors = Vec::new();
+    let mut remaining = timescale;
+    if remaining > 1.0 {
+        while remaining > 2.0 {
+            factors.push(2.0);
+            remaining /= 2.0;
+        }
+        factors.push(remaining);
+    } else {
+        while remaining < 0.5 {
+            factors.push(0.5);
+            remaining /= 0.5;
+        }
+        factors.push(remaining);
+    }
+    factors
+}
+
+fn stretch_audio_atempo(
+    source: &[f32],
+    timescale: f64,
+    sample_rate: u32,
+) -> Result<Vec<f32>, ffmpeg::Error> {
+    if (timescale - 1.0).abs() < f64::EPSILON || source.is_empty() {
+        return Ok(source.to_vec());
+    }
+
+    let channels: usize = AudioRenderer::CHANNELS as usize;
+    let frame_count = source.len() / channels;
+    if frame_count == 0 {
+        return Ok(Vec::new());
+    }
+
+    let mut graph = ffmpeg::filter::Graph::new();
+
+    let channel_layout_bits = ChannelLayout::STEREO.bits();
+    let src_args = format!(
+        "time_base=1/{sample_rate}:sample_rate={sample_rate}:sample_fmt=flt:channel_layout=0x{channel_layout_bits:x}"
+    );
+
+    let mut src = graph.add(
+        &ffmpeg::filter::find("abuffer").expect("abuffer filter unavailable"),
+        "src",
+        &src_args,
+    )?;
+
+    let factors = build_atempo_chain(timescale);
+    let mut atempo_nodes: Vec<ffmpeg::filter::Context> = Vec::with_capacity(factors.len());
+    for (i, factor) in factors.iter().enumerate() {
+        let node = graph.add(
+            &ffmpeg::filter::find("atempo").expect("atempo filter unavailable"),
+            &format!("atempo{i}"),
+            &format!("tempo={factor}"),
+        )?;
+        atempo_nodes.push(node);
+    }
+
+    let mut sink = graph.add(
+        &ffmpeg::filter::find("abuffersink").expect("abuffersink filter unavailable"),
+        "sink",
+        "",
+    )?;
+
+    let mut prev = &mut src;
+    for atempo in atempo_nodes.iter_mut() {
+        prev.link(0, atempo, 0);
+        prev = atempo;
+    }
+    prev.link(0, &mut sink, 0);
+
+    graph.validate()?;
+
+    let mut input_frame = FFAudio::new(
+        avformat::Sample::F32(avformat::sample::Type::Packed),
+        frame_count,
+        ChannelLayout::STEREO,
+    );
+    input_frame.set_rate(sample_rate);
+    let bytes = unsafe { cast_f32_slice_to_bytes(source) };
+    input_frame.data_mut(0)[..bytes.len()].copy_from_slice(bytes);
+
+    src.source().add(&input_frame)?;
+    src.source().flush()?;
+
+    let mut output: Vec<f32> =
+        Vec::with_capacity(((frame_count as f64) / timescale) as usize * channels);
+    let mut out_frame = FFAudio::empty();
+    loop {
+        match sink.sink().frame(&mut out_frame) {
+            Ok(()) => {
+                let samples = out_frame.samples();
+                let plane = out_frame.data(0);
+                let needed = samples * channels * std::mem::size_of::<f32>();
+                let slice = &plane[..needed];
+                let floats = unsafe {
+                    std::slice::from_raw_parts(slice.as_ptr() as *const f32, samples * channels)
+                };
+                output.extend_from_slice(floats);
+            }
+            Err(ffmpeg::Error::Eof) => break,
+            Err(ffmpeg::Error::Other { errno }) if errno == ffmpeg::ffi::EAGAIN => break,
+            Err(err) => return Err(err),
+        }
+    }
+
+    Ok(output)
 }
 
 #[cfg(not(target_os = "windows"))]
@@ -900,7 +1134,7 @@ mod tests {
     }
 
     #[test]
-    fn speed_segment_start_cuts_audio_inside_a_single_request() {
+    fn speed_segment_keeps_audio_at_segment_start() {
         let (_dir, mut renderer, project) = build_renderer_fixture();
         let boundary = 1.0 + 0.25 + 1.0 + 1.0;
 
@@ -913,12 +1147,18 @@ mod tests {
         let before = mean_abs(&samples[..boundary_samples * 2]);
         let after = mean_abs(&samples[boundary_samples * 2..]);
 
-        assert!(before > 0.1);
-        assert!(after < 0.0001);
+        assert!(
+            before > 0.1,
+            "audio before speed segment should not be muted"
+        );
+        assert!(
+            after > 0.01,
+            "audio inside speed segment should not be muted"
+        );
     }
 
     #[test]
-    fn speed_segment_end_resumes_audio_inside_a_single_request() {
+    fn speed_segment_keeps_audio_at_segment_end() {
         let (_dir, mut renderer, project) = build_renderer_fixture();
         let boundary = 1.0 + 0.25 + 1.0 + 1.0 + 0.5;
 
@@ -931,8 +1171,14 @@ mod tests {
         let before = mean_abs(&samples[..boundary_samples * 2]);
         let after = mean_abs(&samples[boundary_samples * 2..]);
 
-        assert!(before < 0.0001);
-        assert!(after > 0.15);
+        assert!(
+            before > 0.01,
+            "audio inside speed segment should not be muted"
+        );
+        assert!(
+            after > 0.15,
+            "audio after speed segment should resume at native level"
+        );
     }
 
     /// One clip per second `section_values`, on a timeline made of `segments`.

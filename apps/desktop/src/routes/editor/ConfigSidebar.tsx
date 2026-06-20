@@ -4103,12 +4103,8 @@ function ClipSegmentConfig(props: {
 			</div>
 
 			<Field name="Speed" icon={<IconLucideFastForward class="size-4" />}>
-				<p class="text-gray-11 -mt-3">
-					Modifying speed will mute this segment's audio.
-				</p>
-
 				<KRadioGroup
-					class="flex flex-row gap-1.5 -mt-1"
+					class="flex flex-row gap-1.5 flex-wrap -mt-1"
 					value={props.segment.timescale.toString()}
 					onChange={(v) => {
 						projectActions.setClipSegmentTimescale(
@@ -4117,7 +4113,7 @@ function ClipSegmentConfig(props: {
 						);
 					}}
 				>
-					<For each={[0.25, 0.5, 1, 1.5, 2, 4, 8]}>
+					<For each={[0.25, 0.5, 0.75, 1, 1.25, 1.5, 2, 4, 8]}>
 						{(mult) => (
 							<KRadioGroup.Item value={mult.toString()}>
 								<KRadioGroup.ItemControl class="px-2 py-1 text-gray-11 hover:text-gray-12 bg-gray-1 border border-gray-3 rounded-md data-checked:bg-gray-3 data-checked:border-gray-4 data-checked:text-gray-12">
@@ -4127,6 +4123,28 @@ function ClipSegmentConfig(props: {
 						)}
 					</For>
 				</KRadioGroup>
+
+				<div class="flex items-center gap-2 mt-1">
+					<span class="text-xs text-gray-11 shrink-0">Custom</span>
+					<Input
+						type="number"
+						min={0.1}
+						max={8}
+						step={0.05}
+						value={props.segment.timescale}
+						class="w-24"
+						onChange={(e) => {
+							const value = Number.parseFloat(e.currentTarget.value);
+							if (Number.isNaN(value)) return;
+							const clamped = Math.min(Math.max(value, 0.1), 8);
+							projectActions.setClipSegmentTimescale(
+								props.segmentIndex,
+								clamped,
+							);
+						}}
+					/>
+					<span class="text-xs text-gray-11">x</span>
+				</div>
 			</Field>
 
 			<div class="space-y-0.5 pt-2">
