@@ -17,7 +17,7 @@ use frame_pipeline::{
 use futures::future::OptionFuture;
 use layers::{
     Background, BackgroundLayer, BlurLayer, CameraLayer, CaptionsLayer, CursorLayer, DisplayLayer,
-    KeyboardLayer, MaskLayer, TextLayer,
+    KeyboardLayer, MaskLayer, OverlayLayer, TextLayer,
 };
 use specta::Type;
 use spring_mass_damper::SpringMassDamperSimulationConfig;
@@ -4034,6 +4034,7 @@ pub struct RendererLayers {
     camera_only: CameraLayer,
     mask: MaskLayer,
     text: TextLayer,
+    overlay: OverlayLayer,
     captions: CaptionsLayer,
     keyboard: KeyboardLayer,
     camera_blur_processor: Option<cap_camera_effects::BlurProcessor>,
@@ -4076,6 +4077,7 @@ impl RendererLayers {
             ),
             mask: MaskLayer::new(device),
             text: TextLayer::new(device, queue),
+            overlay: OverlayLayer::new(device),
             captions: CaptionsLayer::new(device, queue),
             keyboard: KeyboardLayer::new(device, queue),
             camera_blur_processor: None,
@@ -4269,6 +4271,19 @@ impl RendererLayers {
             &uniforms.texts,
         );
 
+        self.overlay.prepare(
+            &constants.device,
+            &constants.queue,
+            uniforms.output_size,
+            uniforms
+                .project
+                .timeline
+                .as_ref()
+                .map(|t| t.overlay_segments.as_slice())
+                .unwrap_or(&[]),
+            uniforms.frame_number as f64 / uniforms.frame_rate as f64,
+        );
+
         self.captions.prepare(
             uniforms,
             segment_frames,
@@ -4409,6 +4424,19 @@ impl RendererLayers {
         );
         timings.text_prepare_duration = start.elapsed();
 
+        self.overlay.prepare(
+            &constants.device,
+            &constants.queue,
+            uniforms.output_size,
+            uniforms
+                .project
+                .timeline
+                .as_ref()
+                .map(|t| t.overlay_segments.as_slice())
+                .unwrap_or(&[]),
+            uniforms.frame_number as f64 / uniforms.frame_rate as f64,
+        );
+
         let start = Instant::now();
         self.captions.prepare(
             uniforms,
@@ -4516,6 +4544,11 @@ impl RendererLayers {
             for mask in &uniforms.masks {
                 self.mask.render(device, queue, session, encoder, mask);
             }
+        }
+
+        if self.overlay.has_content() {
+            let mut pass = render_pass!(session.current_texture_view(), wgpu::LoadOp::Load);
+            self.overlay.render(&mut pass);
         }
 
         if !uniforms.texts.is_empty() {

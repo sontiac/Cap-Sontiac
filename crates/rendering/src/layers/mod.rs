@@ -6,6 +6,7 @@ mod cursor;
 mod display;
 mod keyboard;
 mod mask;
+mod overlay;
 mod text;
 
 pub use background::*;
@@ -16,4 +17,5 @@ pub use cursor::*;
 pub use display::*;
 pub use keyboard::*;
 pub use mask::*;
+pub use overlay::*;
 pub use text::*;
