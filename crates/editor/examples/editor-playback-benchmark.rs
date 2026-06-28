@@ -357,6 +357,7 @@ async fn load_recording(
                 caption_segments: Vec::new(),
                 keyboard_segments: Vec::new(),
                 sfx_segments: Vec::new(),
+                overlay_segments: Vec::new(),
             });
         }
     }
