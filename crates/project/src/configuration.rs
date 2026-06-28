@@ -882,6 +882,41 @@ impl SfxSegment {
 
 #[derive(Type, Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
+pub struct OverlaySegment {
+    pub id: String,
+    pub start: f64,
+    pub end: f64,
+    pub file_path: String,
+    #[serde(default = "OverlaySegment::default_center")]
+    pub center: XY<f64>,
+    #[serde(default = "OverlaySegment::default_size")]
+    pub size: XY<f64>,
+    #[serde(default = "OverlaySegment::default_opacity")]
+    pub opacity: f32,
+    #[serde(default = "OverlaySegment::default_fade_duration")]
+    pub fade_duration: f64,
+}
+
+impl OverlaySegment {
+    fn default_center() -> XY<f64> {
+        XY::new(0.5, 0.5)
+    }
+
+    fn default_size() -> XY<f64> {
+        XY::new(0.5, 0.3)
+    }
+
+    fn default_opacity() -> f32 {
+        1.0
+    }
+
+    fn default_fade_duration() -> f64 {
+        0.2
+    }
+}
+
+#[derive(Type, Serialize, Deserialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
 pub struct TimelineConfiguration {
     pub segments: Vec<TimelineSegment>,
     pub zoom_segments: Vec<ZoomSegment>,
@@ -897,6 +932,8 @@ pub struct TimelineConfiguration {
     pub keyboard_segments: Vec<crate::KeyboardTrackSegment>,
     #[serde(default)]
     pub sfx_segments: Vec<SfxSegment>,
+    #[serde(default)]
+    pub overlay_segments: Vec<OverlaySegment>,
 }
 
 #[derive(Type, Serialize, Deserialize, Clone, Debug)]
@@ -1470,5 +1507,35 @@ mod tests {
 
         assert_eq!(config.cursor.motion_blur, 1.0);
         assert_eq!(config.screen_motion_blur, 1.0);
+    }
+}
+
+#[cfg(test)]
+mod overlay_tests {
+    use super::*;
+
+    #[test]
+    fn overlay_segment_round_trips() {
+        let json = r#"{
+            "id": "ov-1", "start": 1.0, "end": 3.5,
+            "filePath": "/tmp/toast.png",
+            "center": { "x": 0.5, "y": 0.25 },
+            "size": { "x": 0.6, "y": 0.2 },
+            "opacity": 0.9, "fadeDuration": 0.2
+        }"#;
+        let seg: OverlaySegment = serde_json::from_str(json).unwrap();
+        assert_eq!(seg.id, "ov-1");
+        assert_eq!(seg.end, 3.5);
+        assert_eq!(seg.file_path, "/tmp/toast.png");
+        let back = serde_json::to_string(&seg).unwrap();
+        assert!(back.contains("\"filePath\""));
+        assert!(back.contains("\"fadeDuration\""));
+    }
+
+    #[test]
+    fn timeline_defaults_overlay_segments_empty() {
+        let json = r#"{ "segments": [], "zoomSegments": [] }"#;
+        let tl: TimelineConfiguration = serde_json::from_str(json).unwrap();
+        assert!(tl.overlay_segments.is_empty());
     }
 }
