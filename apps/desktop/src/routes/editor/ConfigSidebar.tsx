@@ -525,7 +525,7 @@ export function ConfigSidebar() {
 						<KTabs.Trigger
 							value={item.id}
 							class={cx(
-								"flex relative z-10 flex-1 justify-center items-center px-4 py-2 transition-colors group disabled:opacity-50 focus:outline-hidden",
+								"flex relative z-10 flex-1 justify-center items-center px-2 py-2 transition-colors group disabled:opacity-50 focus:outline-hidden",
 								editorState.timeline.selection
 									? "text-gray-11"
 									: "text-gray-11 data-selected:text-gray-12",
