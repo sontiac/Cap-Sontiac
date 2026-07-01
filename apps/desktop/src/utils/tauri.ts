@@ -153,6 +153,9 @@ async checkImportReady(projectPath: string) : Promise<boolean> {
 async seedSoundEffects() : Promise<number> {
     return await TAURI_INVOKE("seed_sound_effects");
 },
+async seedOverlays() : Promise<number> {
+    return await TAURI_INVOKE("seed_overlays");
+},
 async copyFileToPath(src: string, dst: string) : Promise<null> {
     return await TAURI_INVOKE("copy_file_to_path", { src, dst });
 },
@@ -629,6 +632,8 @@ export type OSPermissionsCheck = { screenRecording: OSPermissionStatus; micropho
 export type OnEscapePress = null
 export type Organization = { id: string; name: string; ownerId: string; role?: string; canEditBrand?: boolean; iconUrl?: string | null; brandColors?: OrganizationBrandColors }
 export type OrganizationBrandColors = { primary: string | null; secondary: string | null; accent: string | null; background: string | null }
+export type OverlayAnim = "slideLeft" | "slideRight" | "slideUp" | "slideDown" | "pop"
+export type OverlaySegment = { id: string; start: number; end: number; filePath: string; center?: XY<number>; size?: XY<number>; opacity?: number; fadeDuration?: number; animIn?: OverlayAnim | null; animOut?: OverlayAnim | null; animDuration?: number }
 export type PhysicalSize = { width: number; height: number }
 export type Plan = { upgraded: boolean; manual: boolean; last_checked: number }
 export type Platform = "MacOS" | "Windows"
@@ -684,7 +689,7 @@ export type StudioRecordingStatus = { status: "InProgress" } | { status: "NeedsR
 export type SystemDiagnostics = { macosVersion: MacOSVersionInfo | null; availableEncoders: string[]; screenCaptureSupported: boolean; metalSupported: boolean; gpuName: string | null }
 export type TargetUnderCursor = { display_id: DisplayId | null; window: WindowUnderCursor | null }
 export type TextSegment = { start: number; end: number; track?: number; enabled?: boolean; content?: string; center?: XY<number>; size?: XY<number>; fontFamily?: string; fontSize?: number; fontWeight?: number; italic?: boolean; color?: string; fadeDuration?: number }
-export type TimelineConfiguration = { segments: TimelineSegment[]; zoomSegments: ZoomSegment[]; sceneSegments?: SceneSegment[]; maskSegments?: MaskSegment[]; textSegments?: TextSegment[]; captionSegments?: CaptionTrackSegment[]; keyboardSegments?: KeyboardTrackSegment[]; sfxSegments?: SfxSegment[] }
+export type TimelineConfiguration = { segments: TimelineSegment[]; zoomSegments: ZoomSegment[]; sceneSegments?: SceneSegment[]; maskSegments?: MaskSegment[]; textSegments?: TextSegment[]; captionSegments?: CaptionTrackSegment[]; keyboardSegments?: KeyboardTrackSegment[]; sfxSegments?: SfxSegment[]; overlaySegments?: OverlaySegment[] }
 export type TimelineSegment = { recordingSegment?: number; timescale: number; start: number; end: number }
 export type TranscriptionEngine = "Whisper" | "Parakeet"
 export type UploadMeta = { state: "MultipartUpload"; video_id: string; file_path: string; pre_created_video: VideoUploadInfo; recording_dir: string } | { state: "SinglePartUpload"; video_id: string; recording_dir: string; file_path: string; screenshot_path: string } | { state: "SegmentUpload"; video_id: string; pre_created_video: VideoUploadInfo; recording_dir: string } | { state: "Failed"; error: string } | { state: "Complete" }
