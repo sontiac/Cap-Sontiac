@@ -880,6 +880,16 @@ impl SfxSegment {
     }
 }
 
+#[derive(Type, Serialize, Deserialize, Clone, Copy, Debug)]
+#[serde(rename_all = "camelCase")]
+pub enum OverlayAnim {
+    SlideLeft,
+    SlideRight,
+    SlideUp,
+    SlideDown,
+    Pop,
+}
+
 #[derive(Type, Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct OverlaySegment {
@@ -895,6 +905,12 @@ pub struct OverlaySegment {
     pub opacity: f32,
     #[serde(default = "OverlaySegment::default_fade_duration")]
     pub fade_duration: f64,
+    #[serde(default)]
+    pub anim_in: Option<OverlayAnim>,
+    #[serde(default)]
+    pub anim_out: Option<OverlayAnim>,
+    #[serde(default = "OverlaySegment::default_anim_duration")]
+    pub anim_duration: f64,
 }
 
 impl OverlaySegment {
@@ -912,6 +928,10 @@ impl OverlaySegment {
 
     fn default_fade_duration() -> f64 {
         0.2
+    }
+
+    fn default_anim_duration() -> f64 {
+        0.35
     }
 }
 

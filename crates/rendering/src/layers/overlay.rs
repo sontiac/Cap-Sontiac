@@ -9,6 +9,31 @@ pub struct PreparedOverlay {
     pub center: cap_project::XY<f64>,
     pub size: cap_project::XY<f64>,
     pub opacity: f32,
+    pub offset: cap_project::XY<f64>,
+    pub scale: f64,
+}
+
+fn ease_out_cubic(p: f64) -> f64 {
+    let q = 1.0 - p;
+    1.0 - q * q * q
+}
+
+fn ease_out_back(p: f64) -> f64 {
+    const C1: f64 = 1.70158;
+    const C3: f64 = C1 + 1.0;
+    let q = p - 1.0;
+    1.0 + C3 * q * q * q + C1 * q * q
+}
+
+fn anim_transform(anim: cap_project::OverlayAnim, p: f64) -> (cap_project::XY<f64>, f64) {
+    use cap_project::OverlayAnim;
+    match anim {
+        OverlayAnim::Pop => (cap_project::XY::new(0.0, 0.0), ease_out_back(p)),
+        OverlayAnim::SlideLeft => (cap_project::XY::new(-(1.0 - ease_out_cubic(p)), 0.0), 1.0),
+        OverlayAnim::SlideRight => (cap_project::XY::new(1.0 - ease_out_cubic(p), 0.0), 1.0),
+        OverlayAnim::SlideUp => (cap_project::XY::new(0.0, -(1.0 - ease_out_cubic(p))), 1.0),
+        OverlayAnim::SlideDown => (cap_project::XY::new(0.0, 1.0 - ease_out_cubic(p)), 1.0),
+    }
 }
 
 pub fn prepare_overlays(
@@ -31,11 +56,30 @@ pub fn prepare_overlays(
             } else {
                 seg.opacity
             };
+
+            let dur = seg.anim_duration.max(1e-4);
+            let p_in = ((frame_time - seg.start) / dur).clamp(0.0, 1.0);
+            let p_out = ((seg.end - frame_time) / dur).clamp(0.0, 1.0);
+            let mut offset = cap_project::XY::new(0.0, 0.0);
+            let mut scale = 1.0;
+            if let Some(a) = seg.anim_in {
+                let (o, s) = anim_transform(a, p_in);
+                offset = cap_project::XY::new(offset.x + o.x, offset.y + o.y);
+                scale *= s;
+            }
+            if let Some(a) = seg.anim_out {
+                let (o, s) = anim_transform(a, p_out);
+                offset = cap_project::XY::new(offset.x + o.x, offset.y + o.y);
+                scale *= s;
+            }
+
             Some(PreparedOverlay {
                 file_path: seg.file_path.clone(),
                 center: seg.center,
                 size: seg.size,
                 opacity,
+                offset,
+                scale,
             })
         })
         .collect()
@@ -100,8 +144,8 @@ impl OverlayLayer {
             }
             let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
 
-            let box_w = overlay.size.x as f32 * out_w;
-            let box_h = overlay.size.y as f32 * out_h;
+            let box_w = (overlay.size.x * overlay.scale) as f32 * out_w;
+            let box_h = (overlay.size.y * overlay.scale) as f32 * out_h;
             if box_w <= 0.0 || box_h <= 0.0 {
                 continue;
             }
@@ -114,8 +158,8 @@ impl OverlayLayer {
                 (box_h * image_ar, box_h)
             };
 
-            let cx = overlay.center.x as f32 * out_w;
-            let cy = overlay.center.y as f32 * out_h;
+            let cx = ((overlay.center.x + overlay.offset.x) as f32) * out_w;
+            let cy = ((overlay.center.y + overlay.offset.y) as f32) * out_h;
             let left = cx - draw_w / 2.0;
             let right = cx + draw_w / 2.0;
             let top = cy - draw_h / 2.0;
@@ -333,7 +377,7 @@ impl OverlayPipeline {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use cap_project::{OverlaySegment, XY};
+    use cap_project::{OverlayAnim, OverlaySegment, XY};
 
     fn seg() -> OverlaySegment {
         OverlaySegment {
@@ -345,6 +389,9 @@ mod tests {
             size: XY::new(0.5, 0.3),
             opacity: 1.0,
             fade_duration: 0.5,
+            anim_in: None,
+            anim_out: None,
+            anim_duration: 0.35,
         }
     }
 
@@ -364,5 +411,33 @@ mod tests {
     fn fades_in_at_edge() {
         let p = prepare_overlays(1.25, &[seg()]);
         assert!(p[0].opacity > 0.0 && p[0].opacity < 1.0);
+    }
+
+    #[test]
+    fn no_anim_is_rest_transform() {
+        let p = prepare_overlays(2.0, &[seg()]);
+        assert_eq!(p[0].offset.x, 0.0);
+        assert_eq!(p[0].offset.y, 0.0);
+        assert!((p[0].scale - 1.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn pop_in_starts_near_zero_scale() {
+        let mut s = seg();
+        s.anim_in = Some(OverlayAnim::Pop);
+        s.anim_duration = 0.5;
+        let p = prepare_overlays(1.0, &[s]);
+        assert!(p[0].scale < 0.05);
+    }
+
+    #[test]
+    fn slide_left_in_starts_offscreen_then_rests() {
+        let mut s = seg();
+        s.anim_in = Some(OverlayAnim::SlideLeft);
+        s.anim_duration = 0.5;
+        let at_start = prepare_overlays(1.0, &[s.clone()]);
+        assert!(at_start[0].offset.x < -0.9);
+        let at_rest = prepare_overlays(2.0, &[s]);
+        assert!(at_rest[0].offset.x.abs() < 1e-6);
     }
 }
