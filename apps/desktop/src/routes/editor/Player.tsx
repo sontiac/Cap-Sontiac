@@ -19,6 +19,7 @@ import {
 	useEditorContext,
 } from "./context";
 import { MaskOverlay } from "./MaskOverlay";
+import { OverlaySegmentOverlay } from "./OverlaySegmentOverlay";
 import { PerformanceOverlay } from "./PerformanceOverlay";
 import { SplitScreenOverlay } from "./SplitScreenOverlay";
 import { TextOverlay } from "./TextOverlay";
@@ -708,6 +709,7 @@ function PreviewCanvas() {
 					<Show when={hasFrame()}>
 						<MaskOverlay size={size()} />
 						<TextOverlay size={size()} />
+						<OverlaySegmentOverlay size={size()} />
 						<SplitScreenOverlay size={size()} />
 						<PerformanceOverlay size={size()} />
 					</Show>

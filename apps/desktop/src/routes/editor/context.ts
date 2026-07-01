@@ -801,7 +801,8 @@ export const [EditorContextProvider, useEditorContext] = createContextProvider(
 					| { type: "mask"; indices: number[] }
 					| { type: "caption"; indices: number[] }
 					| { type: "keyboard"; indices: number[] }
-					| { type: "text"; indices: number[] },
+					| { type: "text"; indices: number[] }
+					| { type: "overlay"; indices: number[] },
 				transform: {
 					// visible seconds
 					zoom: zoomOutLimit(),
