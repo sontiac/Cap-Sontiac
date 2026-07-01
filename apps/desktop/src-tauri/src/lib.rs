@@ -31,6 +31,7 @@ mod presets;
 mod recording;
 mod recording_settings;
 mod recording_telemetry;
+mod overlays;
 mod recovery;
 mod screenshot_editor;
 mod sfx;
@@ -4148,6 +4149,7 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
             import::start_image_import,
             import::check_import_ready,
             sfx::seed_sound_effects,
+            overlays::seed_overlays,
             copy_file_to_path,
             copy_video_to_clipboard,
             copy_screenshot_to_clipboard,

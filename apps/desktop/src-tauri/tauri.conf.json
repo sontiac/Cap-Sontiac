@@ -58,6 +58,7 @@
 			"assets/backgrounds/orange/*": "assets/backgrounds/orange/",
 			"assets/backgrounds/purple/*": "assets/backgrounds/purple/",
 			"assets/sound_effects/*": "assets/sound_effects/",
+			"assets/overlays/*": "assets/overlays/",
 			"../src/assets/rive/*.riv": "assets/rive/"
 		},
 		"macOS": {

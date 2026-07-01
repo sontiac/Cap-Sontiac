@@ -77,6 +77,7 @@ import IconLucideColumns2 from "~icons/lucide/columns-2";
 import IconLucideEyeOff from "~icons/lucide/eye-off";
 import IconLucideGauge from "~icons/lucide/gauge";
 import IconLucideGrid from "~icons/lucide/grid";
+import IconLucideImage from "~icons/lucide/image";
 import IconLucideImageOff from "~icons/lucide/image-off";
 import IconLucideKeyboard from "~icons/lucide/keyboard";
 import IconLucideMonitor from "~icons/lucide/monitor";
@@ -97,6 +98,7 @@ import { type CornerRoundingType, useEditorContext } from "./context";
 import { GradientEditor } from "./GradientEditor";
 import { KeyboardTab } from "./KeyboardTab";
 import { evaluateMask, type MaskKind, type MaskSegment } from "./masks";
+import { OverlaysTab } from "./OverlaysTab";
 import {
 	DEFAULT_BACKGROUND_PADDING,
 	DEFAULT_BACKGROUND_ROUNDING,
@@ -401,6 +403,7 @@ const TAB_IDS = {
 	hotkeys: "hotkeys",
 	captions: "captions",
 	sfx: "sfx",
+	overlays: "overlays",
 } as const;
 
 export function ConfigSidebar() {
@@ -471,14 +474,21 @@ export function ConfigSidebar() {
 			| "keyboard"
 			| "hotkeys"
 			| "captions"
-			| "sfx",
+			| "sfx"
+			| "overlays",
 	});
 
 	let scrollRef!: HTMLDivElement;
 
+	const activeSegmentSelection = () => {
+		const sel = editorState.timeline.selection;
+		return sel && sel.type !== "overlay" ? sel : null;
+	};
+	const isSegmentSelection = () => activeSegmentSelection() !== null;
+
 	return (
 		<KTabs
-			value={editorState.timeline.selection ? undefined : state.selectedTab}
+			value={isSegmentSelection() ? undefined : state.selectedTab}
 			class="flex flex-col min-h-0 shrink-0 flex-1 max-w-104 overflow-hidden rounded-xl z-10 bg-gray-1 dark:bg-gray-2 border border-gray-3"
 		>
 			<KTabs.List class="flex overflow-hidden sticky top-0 z-60 flex-row items-center h-16 text-lg border-b border-gray-3 shrink-0 bg-gray-1 dark:bg-gray-2">
@@ -510,6 +520,10 @@ export function ConfigSidebar() {
 							id: TAB_IDS.sfx,
 							icon: IconLucideMusic,
 						},
+						{
+							id: TAB_IDS.overlays,
+							icon: IconLucideImage,
+						},
 						// { id: "hotkeys" as const, icon: IconCapHotkeys },
 					].filter(Boolean)}
 				>
@@ -517,8 +531,8 @@ export function ConfigSidebar() {
 						<KTabs.Trigger
 							value={item.id}
 							class={cx(
-								"flex relative z-10 flex-1 justify-center items-center px-4 py-2 transition-colors group disabled:opacity-50 focus:outline-hidden",
-								editorState.timeline.selection
+								"flex relative z-10 flex-1 justify-center items-center px-2 py-2 transition-colors group disabled:opacity-50 focus:outline-hidden",
+								isSegmentSelection()
 									? "text-gray-11"
 									: "text-gray-11 data-selected:text-gray-12",
 							)}
@@ -548,7 +562,7 @@ export function ConfigSidebar() {
 				</For>
 
 				{/** Center the indicator with the icon */}
-				<Show when={!editorState.timeline.selection}>
+				<Show when={!isSegmentSelection()}>
 					<KTabs.Indicator class="absolute top-0 left-0 w-full h-full transition-transform duration-200 ease-in-out pointer-events-none will-change-transform">
 						<div class="absolute top-1/2 left-1/2 rounded-lg transform -translate-x-1/2 -translate-y-1/2 bg-gray-3 will-change-transform size-9" />
 					</KTabs.Indicator>
@@ -561,7 +575,7 @@ export function ConfigSidebar() {
 				}}
 				class="custom-scroll overflow-x-hidden overflow-y-scroll text-[0.875rem] flex-1 min-h-0"
 				classList={{
-					hidden: !!editorState.timeline.selection,
+					hidden: isSegmentSelection(),
 				}}
 			>
 				<BackgroundConfig
@@ -950,6 +964,12 @@ export function ConfigSidebar() {
 				>
 					<SfxTab />
 				</KTabs.Content>
+				<KTabs.Content
+					value={TAB_IDS.overlays}
+					class="flex flex-col flex-1 gap-6 p-4 min-h-0 overflow-y-auto"
+				>
+					<OverlaysTab />
+				</KTabs.Content>
 			</div>
 			<div
 				style={{
@@ -957,12 +977,11 @@ export function ConfigSidebar() {
 				}}
 				class="custom-scroll p-4 top-16 left-0 right-0 bottom-0 text-[0.875rem] space-y-4 bg-gray-1 dark:bg-gray-2 z-50"
 				classList={{
-					hidden: !editorState.timeline.selection,
-					"animate-in slide-in-from-bottom-2 fade-in":
-						!!editorState.timeline.selection,
+					hidden: !isSegmentSelection(),
+					"animate-in slide-in-from-bottom-2 fade-in": isSegmentSelection(),
 				}}
 			>
-				<Show when={editorState.timeline.selection}>
+				<Show when={activeSegmentSelection()}>
 					{(selection) => (
 						<Suspense>
 							<Show
