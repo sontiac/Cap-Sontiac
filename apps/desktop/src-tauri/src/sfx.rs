@@ -4,7 +4,7 @@ use tauri::Manager;
 /// Copy every regular file in `src` that does not already exist in `dest`.
 /// Creates `dest` if needed. Idempotent; never overwrites existing files.
 /// Returns the file names that were copied.
-fn copy_missing_files(src: &Path, dest: &Path) -> std::io::Result<Vec<String>> {
+pub(crate) fn copy_missing_files(src: &Path, dest: &Path) -> std::io::Result<Vec<String>> {
     let mut copied = Vec::new();
     if !src.exists() {
         return Ok(copied);

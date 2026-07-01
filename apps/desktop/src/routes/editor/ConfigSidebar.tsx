@@ -77,6 +77,7 @@ import IconLucideColumns2 from "~icons/lucide/columns-2";
 import IconLucideEyeOff from "~icons/lucide/eye-off";
 import IconLucideGauge from "~icons/lucide/gauge";
 import IconLucideGrid from "~icons/lucide/grid";
+import IconLucideImage from "~icons/lucide/image";
 import IconLucideImageOff from "~icons/lucide/image-off";
 import IconLucideKeyboard from "~icons/lucide/keyboard";
 import IconLucideMonitor from "~icons/lucide/monitor";
@@ -97,6 +98,7 @@ import { type CornerRoundingType, useEditorContext } from "./context";
 import { GradientEditor } from "./GradientEditor";
 import { KeyboardTab } from "./KeyboardTab";
 import { evaluateMask, type MaskKind, type MaskSegment } from "./masks";
+import { OverlaysTab } from "./OverlaysTab";
 import {
 	DEFAULT_BACKGROUND_PADDING,
 	DEFAULT_BACKGROUND_ROUNDING,
@@ -401,6 +403,7 @@ const TAB_IDS = {
 	hotkeys: "hotkeys",
 	captions: "captions",
 	sfx: "sfx",
+	overlays: "overlays",
 } as const;
 
 export function ConfigSidebar() {
@@ -471,7 +474,8 @@ export function ConfigSidebar() {
 			| "keyboard"
 			| "hotkeys"
 			| "captions"
-			| "sfx",
+			| "sfx"
+			| "overlays",
 	});
 
 	let scrollRef!: HTMLDivElement;
@@ -509,6 +513,10 @@ export function ConfigSidebar() {
 						{
 							id: TAB_IDS.sfx,
 							icon: IconLucideMusic,
+						},
+						{
+							id: TAB_IDS.overlays,
+							icon: IconLucideImage,
 						},
 						// { id: "hotkeys" as const, icon: IconCapHotkeys },
 					].filter(Boolean)}
@@ -949,6 +957,12 @@ export function ConfigSidebar() {
 					class="flex flex-col flex-1 gap-6 p-4 min-h-0"
 				>
 					<SfxTab />
+				</KTabs.Content>
+				<KTabs.Content
+					value={TAB_IDS.overlays}
+					class="flex flex-col flex-1 gap-6 p-4 min-h-0 overflow-y-auto"
+				>
+					<OverlaysTab />
 				</KTabs.Content>
 			</div>
 			<div
