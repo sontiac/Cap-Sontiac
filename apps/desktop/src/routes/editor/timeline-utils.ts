@@ -133,6 +133,7 @@ export function rippleDeleteAllTracks(
 		textSegments?: Array<{ start: number; end: number }> | null;
 		captionSegments?: Array<{ start: number; end: number }> | null;
 		keyboardSegments?: Array<{ start: number; end: number }> | null;
+		overlaySegments?: Array<{ start: number; end: number }> | null;
 	},
 	cutStart: number,
 	cutEnd: number,
@@ -150,6 +151,8 @@ export function rippleDeleteAllTracks(
 		rippleDeleteFromTrack(timeline.captionSegments, cutStart, cutEnd);
 	if (timeline.keyboardSegments)
 		rippleDeleteFromTrack(timeline.keyboardSegments, cutStart, cutEnd);
+	if (timeline.overlaySegments)
+		rippleDeleteFromTrack(timeline.overlaySegments, cutStart, cutEnd);
 }
 
 export function splitClipSegmentAt(

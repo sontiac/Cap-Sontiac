@@ -42,6 +42,7 @@ import { ClipTrack } from "./ClipTrack";
 import { TimelineContextProvider, useTimelineContext } from "./context";
 import { type KeyboardSegmentDragState, KeyboardTrack } from "./KeyboardTrack";
 import { type MaskSegmentDragState, MaskTrack } from "./MaskTrack";
+import { type OverlaySegmentDragState, OverlayTrack } from "./OverlayTrack";
 import { type SceneSegmentDragState, SceneTrack } from "./SceneTrack";
 import { type TextSegmentDragState, TextTrack } from "./TextTrack";
 import { TrackIcon, TrackManager } from "./TrackManager";
@@ -60,6 +61,7 @@ const trackIcons: Record<TimelineTrackType, () => JSX.Element> = {
 	mask: () => <IconLucideBoxSelect class="size-4" />,
 	zoom: () => <IconLucideSearch class="size-4" />,
 	scene: () => <IconLucideVideo class="size-4" />,
+	overlay: () => <IconLucideImage class="size-4" />,
 };
 
 type TrackDefinition = {
@@ -459,6 +461,7 @@ export function Timeline(props: {
 				textSegments: [],
 				captionSegments: [],
 				keyboardSegments: [],
+				overlaySegments: [],
 			});
 			resume();
 		}
@@ -509,6 +512,7 @@ export function Timeline(props: {
 				project.timeline.maskSegments ??= [];
 				project.timeline.textSegments ??= [];
 				project.timeline.zoomSegments ??= [];
+				project.timeline.overlaySegments ??= [];
 			}),
 		);
 	}
@@ -519,6 +523,7 @@ export function Timeline(props: {
 	let textSegmentDragState = { type: "idle" } as TextSegmentDragState;
 	let captionSegmentDragState = { type: "idle" } as CaptionSegmentDragState;
 	let keyboardSegmentDragState = { type: "idle" } as KeyboardSegmentDragState;
+	let overlaySegmentDragState = { type: "idle" } as OverlaySegmentDragState;
 
 	let pendingZoomDelta = 0;
 	let pendingZoomOrigin: number | null = null;
@@ -595,7 +600,8 @@ export function Timeline(props: {
 			maskSegmentDragState.type !== "moving" &&
 			textSegmentDragState.type !== "moving" &&
 			captionSegmentDragState.type !== "moving" &&
-			keyboardSegmentDragState.type !== "moving"
+			keyboardSegmentDragState.type !== "moving" &&
+			overlaySegmentDragState.type !== "moving"
 		) {
 			if (!metrics) return;
 			const rawTime =
@@ -652,6 +658,8 @@ export function Timeline(props: {
 				projectActions.deleteMaskSegments(selection.indices);
 			} else if (selection.type === "text") {
 				projectActions.deleteTextSegments(selection.indices);
+			} else if (selection.type === "overlay") {
+				projectActions.deleteOverlaySegments(selection.indices);
 			} else if (selection.type === "clip") {
 				// Delete all selected clips in reverse order
 				[...selection.indices]
@@ -984,6 +992,14 @@ export function Timeline(props: {
 								<ZoomTrack
 									onDragStateChanged={(v) => {
 										zoomSegmentDragState = v;
+									}}
+									handleUpdatePlayhead={handleUpdatePlayhead}
+								/>
+							</TrackRow>
+							<TrackRow icon={trackIcons.overlay}>
+								<OverlayTrack
+									onDragStateChanged={(v) => {
+										overlaySegmentDragState = v;
 									}}
 									handleUpdatePlayhead={handleUpdatePlayhead}
 								/>
