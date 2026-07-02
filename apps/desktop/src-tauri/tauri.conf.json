@@ -36,7 +36,7 @@
 	},
 	"bundle": {
 		"active": true,
-		"createUpdaterArtifacts": true,
+		"createUpdaterArtifacts": false,
 		"targets": "all",
 		"externalBin": [
 			"binaries/cap-muxer",
@@ -62,6 +62,7 @@
 			"../src/assets/rive/*.riv": "assets/rive/"
 		},
 		"macOS": {
+			"hardenedRuntime": false,
 			"dmg": {
 				"background": "assets/dmg-background.png",
 				"appPosition": {
