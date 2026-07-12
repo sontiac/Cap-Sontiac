@@ -241,3 +241,10 @@ if (import.meta.vitest) {
 		});
 	});
 }
+
+export function overlayThumbPath(seg: {
+	filePath: string;
+	fps?: number | null;
+}): string {
+	return seg.fps != null ? `${seg.filePath}/0001.png` : seg.filePath;
+}

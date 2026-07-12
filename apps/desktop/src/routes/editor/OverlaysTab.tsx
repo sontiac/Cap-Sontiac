@@ -11,6 +11,7 @@ import IconLucideImagePlus from "~icons/lucide/image-plus";
 import IconLucideTrash2 from "~icons/lucide/trash-2";
 
 import { serializeProjectConfiguration, useEditorContext } from "./context";
+import { overlayThumbPath } from "./timeline-utils";
 
 const OVERLAY_FOLDER = "overlays";
 const OVERLAY_DEFAULT_DURATION = 3;
@@ -25,9 +26,12 @@ const ANIM_OPTIONS = [
 	{ value: "pop", label: "Pop" },
 ] as const;
 
-type SegmentView = Required<Omit<OverlaySegment, "animIn" | "animOut">> & {
+type SegmentView = Required<
+	Omit<OverlaySegment, "animIn" | "animOut" | "fps">
+> & {
 	animIn: OverlayAnim | null;
 	animOut: OverlayAnim | null;
+	fps?: number | null;
 };
 
 interface OverlayAsset {
@@ -222,7 +226,7 @@ export function OverlaysTab() {
 									>
 										<div class="flex items-center gap-2">
 											<img
-												src={convertFileSrc(seg.filePath)}
+												src={convertFileSrc(overlayThumbPath(seg))}
 												alt={fileName(seg.filePath)}
 												class="size-8 object-contain shrink-0"
 											/>

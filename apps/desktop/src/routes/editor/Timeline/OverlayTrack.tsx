@@ -4,6 +4,7 @@ import { cx } from "cva";
 import { createMemo, createRoot, Index, Show } from "solid-js";
 
 import { useEditorContext } from "../context";
+import { overlayThumbPath } from "../timeline-utils";
 import { useTimelineContext, useTrackContext } from "./context";
 import {
 	SegmentContent,
@@ -202,7 +203,7 @@ export function OverlayTrack(props: {
 									)}
 								>
 									<img
-										src={convertFileSrc(segment().filePath)}
+										src={convertFileSrc(overlayThumbPath(segment()))}
 										alt=""
 										class="size-8 object-contain shrink-0 pointer-events-none"
 									/>
