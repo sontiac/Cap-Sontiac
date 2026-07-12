@@ -38,6 +38,13 @@ fn anim_transform(anim: cap_project::OverlayAnim, p: f64) -> (cap_project::XY<f6
     }
 }
 
+pub fn is_sequence_frame(name: &str) -> bool {
+    match name.strip_suffix(".png") {
+        Some(stem) => stem.len() == 4 && stem.bytes().all(|b| b.is_ascii_digit()),
+        None => false,
+    }
+}
+
 pub fn sequence_frame_index(frame_time: f64, start: f64, fps: f64, frame_count: usize) -> usize {
     if frame_count == 0 {
         return 0;
@@ -245,8 +252,9 @@ impl OverlayLayer {
                 .map(|entries| {
                     entries
                         .filter_map(|entry| entry.ok())
+                        .filter(|entry| entry.path().is_file())
+                        .filter(|entry| entry.file_name().to_str().is_some_and(is_sequence_frame))
                         .map(|entry| entry.path())
-                        .filter(|path| path.extension().is_some_and(|ext| ext == "png"))
                         .filter_map(|path| path.to_str().map(String::from))
                         .collect()
                 })
@@ -508,6 +516,23 @@ mod tests {
         assert!(at_start[0].offset.x < -0.9);
         let at_rest = prepare_overlays(2.0, &[s]);
         assert!(at_rest[0].offset.x.abs() < 1e-6);
+    }
+
+    #[test]
+    fn sequence_frame_accepts_four_digit_png() {
+        assert!(is_sequence_frame("0001.png"));
+        assert!(is_sequence_frame("0600.png"));
+    }
+
+    #[test]
+    fn sequence_frame_rejects_bad_names() {
+        assert!(!is_sequence_frame("1.png"));
+        assert!(!is_sequence_frame("00001.png"));
+        assert!(!is_sequence_frame("abcd.png"));
+        assert!(!is_sequence_frame("0001.jpg"));
+        assert!(!is_sequence_frame("0001.PNG"));
+        assert!(!is_sequence_frame(".png"));
+        assert!(!is_sequence_frame("0001"));
     }
 
     #[test]
