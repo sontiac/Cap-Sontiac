@@ -109,11 +109,27 @@ struct OverlayDraw {
     bind_group: wgpu::BindGroup,
 }
 
+const MAX_OVERLAY_TEXTURES: usize = 256;
+
+fn stale_texture_paths(last_used: &HashMap<String, u64>, max: usize) -> Vec<String> {
+    if last_used.len() <= max {
+        return Vec::new();
+    }
+    let mut entries: Vec<(&String, u64)> = last_used.iter().map(|(p, t)| (p, *t)).collect();
+    entries.sort_by(|a, b| a.1.cmp(&b.1).then_with(|| a.0.cmp(b.0)));
+    entries[..last_used.len() - max]
+        .iter()
+        .map(|(p, _)| (*p).clone())
+        .collect()
+}
+
 pub struct OverlayLayer {
     pipeline: OverlayPipeline,
     textures: HashMap<String, wgpu::Texture>,
     sequences: HashMap<String, Vec<String>>,
     draws: Vec<OverlayDraw>,
+    last_used: HashMap<String, u64>,
+    tick: u64,
 }
 
 impl OverlayLayer {
@@ -123,6 +139,8 @@ impl OverlayLayer {
             textures: HashMap::new(),
             sequences: HashMap::new(),
             draws: Vec::new(),
+            last_used: HashMap::new(),
+            tick: 0,
         }
     }
 
@@ -135,6 +153,7 @@ impl OverlayLayer {
         frame_time: f64,
     ) {
         self.draws.clear();
+        self.tick = self.tick.wrapping_add(1);
 
         let (out_w, out_h) = (output_size.0 as f32, output_size.1 as f32);
         if out_w <= 0.0 || out_h <= 0.0 {
@@ -161,6 +180,7 @@ impl OverlayLayer {
             if !self.ensure_texture(device, queue, &path) {
                 continue;
             }
+            self.last_used.insert(path.clone(), self.tick);
             let Some(texture) = self.textures.get(&path) else {
                 continue;
             };
@@ -211,6 +231,11 @@ impl OverlayLayer {
 
             let bind_group = self.pipeline.bind_group(device, &uniform_buffer, &view);
             self.draws.push(OverlayDraw { bind_group });
+        }
+
+        for stale in stale_texture_paths(&self.last_used, MAX_OVERLAY_TEXTURES) {
+            self.textures.remove(&stale);
+            self.last_used.remove(&stale);
         }
     }
 
@@ -503,5 +528,17 @@ mod tests {
         let p = prepare_overlays(2.0, &[s]);
         assert_eq!(p[0].fps, Some(2.0));
         assert_eq!(p[0].seg_start, 1.0);
+    }
+
+    #[test]
+    fn stale_paths_keep_most_recent() {
+        let mut m = HashMap::new();
+        m.insert("a".to_string(), 1u64);
+        m.insert("b".to_string(), 3u64);
+        m.insert("c".to_string(), 2u64);
+        assert_eq!(stale_texture_paths(&m, 2), vec!["a".to_string()]);
+        assert!(stale_texture_paths(&m, 3).is_empty());
+        let evicted = stale_texture_paths(&m, 1);
+        assert_eq!(evicted, vec!["a".to_string(), "c".to_string()]);
     }
 }
