@@ -11,6 +11,8 @@ pub struct PreparedOverlay {
     pub opacity: f32,
     pub offset: cap_project::XY<f64>,
     pub scale: f64,
+    pub seg_start: f64,
+    pub fps: Option<f64>,
 }
 
 fn ease_out_cubic(p: f64) -> f64 {
@@ -34,6 +36,14 @@ fn anim_transform(anim: cap_project::OverlayAnim, p: f64) -> (cap_project::XY<f6
         OverlayAnim::SlideUp => (cap_project::XY::new(0.0, -(1.0 - ease_out_cubic(p))), 1.0),
         OverlayAnim::SlideDown => (cap_project::XY::new(0.0, 1.0 - ease_out_cubic(p)), 1.0),
     }
+}
+
+pub fn sequence_frame_index(frame_time: f64, start: f64, fps: f64, frame_count: usize) -> usize {
+    if frame_count == 0 {
+        return 0;
+    }
+    let raw = ((frame_time - start).max(0.0) * fps) as usize;
+    raw.min(frame_count - 1)
 }
 
 pub fn prepare_overlays(
@@ -80,6 +90,8 @@ pub fn prepare_overlays(
                 opacity,
                 offset,
                 scale,
+                seg_start: seg.start,
+                fps: seg.fps,
             })
         })
         .collect()
@@ -100,6 +112,7 @@ struct OverlayDraw {
 pub struct OverlayLayer {
     pipeline: OverlayPipeline,
     textures: HashMap<String, wgpu::Texture>,
+    sequences: HashMap<String, Vec<String>>,
     draws: Vec<OverlayDraw>,
 }
 
@@ -108,6 +121,7 @@ impl OverlayLayer {
         Self {
             pipeline: OverlayPipeline::new(device),
             textures: HashMap::new(),
+            sequences: HashMap::new(),
             draws: Vec::new(),
         }
     }
@@ -131,11 +145,23 @@ impl OverlayLayer {
             if overlay.opacity <= 0.0 {
                 continue;
             }
-            if !self.ensure_texture(device, queue, &overlay.file_path) {
+
+            let path = match overlay.fps.filter(|fps| *fps > 0.0) {
+                Some(fps) => {
+                    let frames = self.sequence_frames(&overlay.file_path);
+                    if frames.is_empty() {
+                        continue;
+                    }
+                    let idx =
+                        sequence_frame_index(frame_time, overlay.seg_start, fps, frames.len());
+                    frames[idx].clone()
+                }
+                None => overlay.file_path.clone(),
+            };
+            if !self.ensure_texture(device, queue, &path) {
                 continue;
             }
-
-            let Some(texture) = self.textures.get(&overlay.file_path) else {
+            let Some(texture) = self.textures.get(&path) else {
                 continue;
             };
             let (tex_w, tex_h) = (texture.width() as f32, texture.height() as f32);
@@ -186,6 +212,23 @@ impl OverlayLayer {
             let bind_group = self.pipeline.bind_group(device, &uniform_buffer, &view);
             self.draws.push(OverlayDraw { bind_group });
         }
+    }
+
+    fn sequence_frames(&mut self, dir: &str) -> &Vec<String> {
+        self.sequences.entry(dir.to_string()).or_insert_with(|| {
+            let mut frames: Vec<String> = std::fs::read_dir(dir)
+                .map(|entries| {
+                    entries
+                        .filter_map(|entry| entry.ok())
+                        .map(|entry| entry.path())
+                        .filter(|path| path.extension().is_some_and(|ext| ext == "png"))
+                        .filter_map(|path| path.to_str().map(String::from))
+                        .collect()
+                })
+                .unwrap_or_default();
+            frames.sort();
+            frames
+        })
     }
 
     fn ensure_texture(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, path: &str) -> bool {
@@ -392,6 +435,7 @@ mod tests {
             anim_in: None,
             anim_out: None,
             anim_duration: 0.35,
+            fps: None,
         }
     }
 
@@ -439,5 +483,25 @@ mod tests {
         assert!(at_start[0].offset.x < -0.9);
         let at_rest = prepare_overlays(2.0, &[s]);
         assert!(at_rest[0].offset.x.abs() < 1e-6);
+    }
+
+    #[test]
+    fn sequence_index_advances_and_clamps() {
+        assert_eq!(sequence_frame_index(1.0, 1.0, 2.0, 10), 0);
+        assert_eq!(sequence_frame_index(1.4, 1.0, 2.0, 10), 0);
+        assert_eq!(sequence_frame_index(1.5, 1.0, 2.0, 10), 1);
+        assert_eq!(sequence_frame_index(3.0, 1.0, 2.0, 10), 4);
+        assert_eq!(sequence_frame_index(99.0, 1.0, 2.0, 10), 9);
+        assert_eq!(sequence_frame_index(0.0, 1.0, 2.0, 10), 0);
+        assert_eq!(sequence_frame_index(5.0, 1.0, 2.0, 0), 0);
+    }
+
+    #[test]
+    fn prepared_overlay_carries_fps_and_start() {
+        let mut s = seg();
+        s.fps = Some(2.0);
+        let p = prepare_overlays(2.0, &[s]);
+        assert_eq!(p[0].fps, Some(2.0));
+        assert_eq!(p[0].seg_start, 1.0);
     }
 }

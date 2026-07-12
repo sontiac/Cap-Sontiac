@@ -911,6 +911,8 @@ pub struct OverlaySegment {
     pub anim_out: Option<OverlayAnim>,
     #[serde(default = "OverlaySegment::default_anim_duration")]
     pub anim_duration: f64,
+    #[serde(default)]
+    pub fps: Option<f64>,
 }
 
 impl OverlaySegment {
