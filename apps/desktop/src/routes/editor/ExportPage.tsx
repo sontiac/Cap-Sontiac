@@ -34,6 +34,7 @@ import {
 	createExportToFileTask,
 } from "~/utils/export";
 import { createSelectedOrganization } from "~/utils/organization-branding";
+import { nativeCanvasSize, renderedOutputSize } from "~/utils/socials-export";
 import {
 	commands,
 	type ExportCompression,
@@ -167,6 +168,7 @@ export function ExportPage() {
 		setExportState,
 		exportState,
 		meta,
+		project,
 		refetchMeta,
 	} = useEditorContext();
 
@@ -184,6 +186,41 @@ export function ExportPage() {
 			backgroundSource.alpha !== undefined &&
 			backgroundSource.alpha < 255
 		);
+	};
+
+	const socialsDisplay = () => editorInstance.recordings.segments[0]?.display;
+	const socialsCanvas = () => {
+		const display = socialsDisplay();
+		if (!display) return null;
+		return nativeCanvasSize(project, display);
+	};
+	const socialsFps = () => {
+		const display = socialsDisplay();
+		const fps = display ? Math.round(display.fps) : 0;
+		return fps > 0 ? fps : 30;
+	};
+	const socialsSubtitle = () => {
+		const canvas = socialsCanvas();
+		if (!canvas) return null;
+		const output = renderedOutputSize(canvas);
+		return `${output.x}×${output.y} · ${socialsFps()}fps · max quality · mp4`;
+	};
+	const socialsDisabledReason = () => {
+		if (!socialsCanvas()) return "Recording metadata is unavailable";
+		if (hasTransparentBackground())
+			return "Transparent backgrounds can't be exported as MP4";
+		return undefined;
+	};
+	const socialsExportSettings = (): ExportSettings | null => {
+		const canvas = socialsCanvas();
+		if (!canvas) return null;
+		return {
+			format: "Mp4",
+			fps: socialsFps(),
+			resolution_base: canvas,
+			compression: "Maximum",
+			custom_bpp: null,
+		};
 	};
 
 	const isCancellationError = (error: unknown) =>
@@ -505,20 +542,20 @@ export function ExportPage() {
 
 	const [outputPath, setOutputPath] = createSignal<string | null>(null);
 	const [isCancelled, setIsCancelled] = createSignal(false);
-	const exportFileExtension = () =>
-		isMovCursorOnlyExport() ? "mov" : settings.format === "Gif" ? "gif" : "mp4";
-	const exportedAssetLabel = () =>
-		isMovCursorOnlyExport()
-			? "Cursor track"
-			: settings.format === "Gif"
-				? "GIF"
-				: "Recording";
-	const exportMediumLabel = () =>
-		isMovCursorOnlyExport()
-			? "cursor track"
-			: settings.format === "Gif"
-				? "GIF"
-				: "video";
+	const saveSettingsOverrideActive = () =>
+		exportState.type !== "idle" &&
+		exportState.action === "save" &&
+		save.variables !== undefined;
+	const exportedAssetLabel = () => {
+		if (saveSettingsOverrideActive()) return "Recording";
+		if (isMovCursorOnlyExport()) return "Cursor track";
+		return settings.format === "Gif" ? "GIF" : "Recording";
+	};
+	const exportMediumLabel = () => {
+		if (saveSettingsOverrideActive()) return "video";
+		if (isMovCursorOnlyExport()) return "cursor track";
+		return settings.format === "Gif" ? "GIF" : "video";
+	};
 
 	const handleCancel = async () => {
 		if (
@@ -581,18 +618,25 @@ export function ExportPage() {
 	}));
 
 	const save = createMutation(() => ({
-		mutationFn: async () => {
+		mutationFn: async (settingsOverride?: ExportSettings) => {
 			setIsCancelled(false);
 			if (exportState.type !== "idle") return;
-			const extension = exportFileExtension();
 			const customBpp =
 				advancedMode() && isCustomBpp() ? compressionBpp() : null;
-			const exportSettings = buildExportSettings(
-				settings,
-				isMovCursorOnlyExport(),
-				customBpp,
-				forceFfmpegDecoder(),
-			);
+			const exportSettings =
+				settingsOverride ??
+				buildExportSettings(
+					settings,
+					isMovCursorOnlyExport(),
+					customBpp,
+					forceFfmpegDecoder(),
+				);
+			const extension =
+				exportSettings.format === "Mov"
+					? "mov"
+					: exportSettings.format === "Gif"
+						? "gif"
+						: "mp4";
 			const task = createExportToFileTask(
 				projectPath,
 				exportSettings,
@@ -901,6 +945,15 @@ export function ExportPage() {
 
 				<div class="w-[400px] border-l border-gray-3 flex flex-col bg-gray-1 dark:bg-gray-2">
 					<div class="flex-1 overflow-y-auto p-4 space-y-5">
+						<SocialsExportCard
+							subtitle={socialsSubtitle()}
+							disabledReason={socialsDisabledReason()}
+							onExport={() => {
+								const exportSettings = socialsExportSettings();
+								if (exportSettings) save.mutate(exportSettings);
+							}}
+						/>
+
 						<Field name="Destination" icon={<IconCapUpload class="size-4" />}>
 							<div class="flex gap-1.5">
 								<For each={EXPORT_TO_OPTIONS}>
@@ -1395,7 +1448,7 @@ export function ExportPage() {
 									variant="blue"
 									size="lg"
 									onClick={() => {
-										if (settings.exportTo === "file") save.mutate();
+										if (settings.exportTo === "file") save.mutate(undefined);
 										else if (settings.exportTo === "link") upload.mutate();
 										else copy.mutate();
 									}}
@@ -1823,5 +1876,41 @@ function CompletedExport(props: { title: string; subtitle: string }) {
 				<p class="text-sm text-gray-11">{props.subtitle}</p>
 			</div>
 		</div>
+	);
+}
+
+function SocialsExportCard(props: {
+	subtitle: string | null;
+	disabledReason?: string;
+	onExport: () => void;
+}) {
+	const button = (
+		<button
+			type="button"
+			disabled={!!props.disabledReason}
+			onClick={() => props.onExport()}
+			class={cx(
+				"w-full flex items-center gap-3 px-4 py-3 rounded-xl border border-blue-8 bg-linear-to-r from-blue-9 to-blue-10 text-left text-white transition-all hover:from-blue-10 hover:to-blue-11 hover:shadow-lg",
+				props.disabledReason &&
+					"opacity-50 cursor-not-allowed hover:shadow-none",
+			)}
+		>
+			<div class="flex justify-center items-center rounded-lg size-9 bg-white/15 shrink-0">
+				<IconLucideClapperboard class="size-5" />
+			</div>
+			<div class="flex flex-col min-w-0">
+				<span class="text-sm font-semibold">Export to Socials</span>
+				<span class="text-xs text-white/75 truncate">
+					{props.subtitle ?? "Recording metadata is unavailable"}
+				</span>
+			</div>
+			<IconLucideZap class="size-4 ml-auto shrink-0 text-white/80" />
+		</button>
+	);
+
+	return props.disabledReason ? (
+		<Tooltip content={props.disabledReason}>{button}</Tooltip>
+	) : (
+		button
 	);
 }

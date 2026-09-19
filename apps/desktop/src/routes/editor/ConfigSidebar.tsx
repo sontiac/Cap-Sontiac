@@ -482,7 +482,7 @@ export function ConfigSidebar() {
 
 	const activeSegmentSelection = () => {
 		const sel = editorState.timeline.selection;
-		return sel && sel.type !== "overlay" ? sel : null;
+		return sel && sel.type !== "overlay" && sel.type !== "sfx" ? sel : null;
 	};
 	const isSegmentSelection = () => activeSegmentSelection() !== null;
 

@@ -119,7 +119,8 @@ export type TimelineTrackType =
 	| "zoom"
 	| "scene"
 	| "mask"
-	| "overlay";
+	| "overlay"
+	| "sfx";
 
 export const MAX_ZOOM_IN = 3;
 const PROJECT_SAVE_DEBOUNCE_MS = 250;
@@ -355,6 +356,23 @@ export const [EditorContextProvider, useEditorContext] = createContextProvider(
 					setProject(
 						"timeline",
 						"overlaySegments",
+						produce((s) => {
+							if (!s) return;
+							const sorted = [...new Set(segmentIndices)]
+								.filter((i) => Number.isInteger(i) && i >= 0 && i < s.length)
+								.sort((a, b) => b - a);
+							if (sorted.length === 0) return;
+							for (const i of sorted) s.splice(i, 1);
+						}),
+					);
+					setEditorState("timeline", "selection", null);
+				});
+			},
+			deleteSfxSegments: (segmentIndices: number[]) => {
+				batch(() => {
+					setProject(
+						"timeline",
+						"sfxSegments",
 						produce((s) => {
 							if (!s) return;
 							const sorted = [...new Set(segmentIndices)]
@@ -820,7 +838,8 @@ export const [EditorContextProvider, useEditorContext] = createContextProvider(
 					| { type: "caption"; indices: number[] }
 					| { type: "keyboard"; indices: number[] }
 					| { type: "text"; indices: number[] }
-					| { type: "overlay"; indices: number[] },
+					| { type: "overlay"; indices: number[] }
+					| { type: "sfx"; indices: number[] },
 				transform: {
 					// visible seconds
 					zoom: zoomOutLimit(),
@@ -866,6 +885,7 @@ export const [EditorContextProvider, useEditorContext] = createContextProvider(
 					mask: initialMaskTrackCount,
 					text: initialTextTrackCount,
 					overlay: true,
+					sfx: true,
 				},
 				hoveredTrack: null as null | TimelineTrackType,
 				hoveredMaskIndex: null as number | null,

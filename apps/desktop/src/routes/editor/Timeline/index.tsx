@@ -44,6 +44,7 @@ import { type KeyboardSegmentDragState, KeyboardTrack } from "./KeyboardTrack";
 import { type MaskSegmentDragState, MaskTrack } from "./MaskTrack";
 import { type OverlaySegmentDragState, OverlayTrack } from "./OverlayTrack";
 import { type SceneSegmentDragState, SceneTrack } from "./SceneTrack";
+import { type SfxSegmentDragState, SfxTrack } from "./SfxTrack";
 import { type TextSegmentDragState, TextTrack } from "./TextTrack";
 import { TrackIcon, TrackManager } from "./TrackManager";
 import { type ZoomSegmentDragState, ZoomTrack } from "./ZoomTrack";
@@ -62,6 +63,7 @@ const trackIcons: Record<TimelineTrackType, () => JSX.Element> = {
 	zoom: () => <IconLucideSearch class="size-4" />,
 	scene: () => <IconLucideVideo class="size-4" />,
 	overlay: () => <IconLucideImage class="size-4" />,
+	sfx: () => <IconLucideVolume2 class="size-4" />,
 };
 
 type TrackDefinition = {
@@ -513,6 +515,7 @@ export function Timeline(props: {
 				project.timeline.textSegments ??= [];
 				project.timeline.zoomSegments ??= [];
 				project.timeline.overlaySegments ??= [];
+				project.timeline.sfxSegments ??= [];
 			}),
 		);
 	}
@@ -524,6 +527,7 @@ export function Timeline(props: {
 	let captionSegmentDragState = { type: "idle" } as CaptionSegmentDragState;
 	let keyboardSegmentDragState = { type: "idle" } as KeyboardSegmentDragState;
 	let overlaySegmentDragState = { type: "idle" } as OverlaySegmentDragState;
+	let sfxSegmentDragState = { type: "idle" } as SfxSegmentDragState;
 
 	let pendingZoomDelta = 0;
 	let pendingZoomOrigin: number | null = null;
@@ -601,7 +605,8 @@ export function Timeline(props: {
 			textSegmentDragState.type !== "moving" &&
 			captionSegmentDragState.type !== "moving" &&
 			keyboardSegmentDragState.type !== "moving" &&
-			overlaySegmentDragState.type !== "moving"
+			overlaySegmentDragState.type !== "moving" &&
+			sfxSegmentDragState.type !== "moving"
 		) {
 			if (!metrics) return;
 			const rawTime =
@@ -660,6 +665,8 @@ export function Timeline(props: {
 				projectActions.deleteTextSegments(selection.indices);
 			} else if (selection.type === "overlay") {
 				projectActions.deleteOverlaySegments(selection.indices);
+			} else if (selection.type === "sfx") {
+				projectActions.deleteSfxSegments(selection.indices);
 			} else if (selection.type === "clip") {
 				// Delete all selected clips in reverse order
 				[...selection.indices]
@@ -1000,6 +1007,14 @@ export function Timeline(props: {
 								<OverlayTrack
 									onDragStateChanged={(v) => {
 										overlaySegmentDragState = v;
+									}}
+									handleUpdatePlayhead={handleUpdatePlayhead}
+								/>
+							</TrackRow>
+							<TrackRow icon={trackIcons.sfx}>
+								<SfxTrack
+									onDragStateChanged={(v) => {
+										sfxSegmentDragState = v;
 									}}
 									handleUpdatePlayhead={handleUpdatePlayhead}
 								/>
