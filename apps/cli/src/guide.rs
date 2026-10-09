@@ -251,6 +251,20 @@ fn build() -> Guide {
             ),
             CommandDoc {
                 notes: Some(
+                    "Transcodes the file (one re-encode, rotation honored) into a new recording segment and \
+                     appends it to the end of the timeline, as the desktop editor's add-clip does. A source \
+                     with no audio track becomes a silent segment. Use it to build one project from several \
+                     recordings, then rearrange the timeline with `project config set`.",
+                ),
+                ..cmd(
+                    "project append",
+                    "Append an external video file to an existing .cap project as a new recording segment.",
+                    OutputMode::Ndjson,
+                    &["progress", "completed", "error"],
+                )
+            },
+            CommandDoc {
+                notes: Some(
                     "set is strict: submitted fields that this Cap version would silently drop abort the \
                      write and are listed as JSON paths. Omitted fields reset to defaults — always start \
                      from `config get` output when editing.",

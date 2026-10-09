@@ -9,7 +9,8 @@ use relative_path::RelativePathBuf;
 use tracing::{error, info};
 
 use crate::{
-    ImportError, ImportStage, thumbnail::write_video_thumbnail, transcode::transcode_video,
+    ImportError, ImportStage, append::imported_system_audio, thumbnail::write_video_thumbnail,
+    transcode::transcode_video,
 };
 
 pub struct ImportedVideo {
@@ -125,21 +126,11 @@ impl PreparedImport {
             "Creating project metadata...",
         );
 
-        const MIN_VALID_AUDIO_SIZE: u64 = 1000;
-        let audio_file_size = std::fs::metadata(&output_audio_path)
-            .map(|m| m.len())
-            .unwrap_or(0);
-        let system_audio =
-            if transcoded.sample_rate.is_some() && audio_file_size > MIN_VALID_AUDIO_SIZE {
-                Some(AudioMeta {
-                    path: RelativePathBuf::from("content/segments/segment-0/audio.ogg"),
-                    start_time: Some(0.0),
-                    device_id: None,
-                    gap_summary: None,
-                })
-            } else {
-                None
-            };
+        let system_audio = imported_system_audio(
+            transcoded.sample_rate,
+            &output_audio_path,
+            RelativePathBuf::from("content/segments/segment-0/audio.ogg"),
+        );
         let has_audio = system_audio.is_some();
 
         let meta = import_meta(

@@ -1,11 +1,13 @@
 use cap_enc_ffmpeg::remux::{get_media_duration, probe_video_can_decode};
 use cap_project::{
-    AudioMeta, ClipConfiguration, CursorEvents, CursorMeta, Cursors, InstantRecordingMeta,
-    MultipleSegment, MultipleSegments, Platform, ProjectConfiguration, RecordingMeta,
-    RecordingMetaInner, SingleSegment, StudioRecordingMeta, StudioRecordingStatus,
-    TimelineConfiguration, TimelineSegment, VideoMeta, XY,
+    AudioMeta, CursorEvents, CursorMeta, Cursors, InstantRecordingMeta, MultipleSegment, Platform,
+    ProjectConfiguration, RecordingMeta, RecordingMetaInner, SingleSegment, StudioRecordingMeta,
+    StudioRecordingStatus, TimelineSegment, VideoMeta, XY,
 };
-use cap_video_import::{ImportError, ImportStage, TranscodeOutput, transcode_video};
+use cap_video_import::{
+    ImportError, ImportStage, add_clip_configs, append_video_to_project, ensure_multiple_segments,
+    ensure_project_timeline, single_segment_to_multiple, unique_segment_dir, video_duration_secs,
+};
 use image::ImageEncoder;
 use relative_path::{Component as RelativeComponent, RelativePathBuf};
 use serde::Serialize;
@@ -207,62 +209,6 @@ fn same_project_path(a: &Path, b: &Path) -> bool {
     a == b
 }
 
-fn ensure_multiple_segments(meta: &mut RecordingMeta) -> Result<&mut MultipleSegments, String> {
-    let RecordingMetaInner::Studio(studio_meta) = &mut meta.inner else {
-        return Err("Instant mode recordings cannot be edited".to_string());
-    };
-
-    if let StudioRecordingMeta::SingleSegment { segment } = studio_meta.as_ref() {
-        let segment = segment.clone();
-        **studio_meta = StudioRecordingMeta::MultipleSegments {
-            inner: MultipleSegments {
-                segments: vec![MultipleSegment {
-                    display: segment.display,
-                    camera: segment.camera,
-                    mic: segment.audio,
-                    system_audio: None,
-                    cursor: segment.cursor,
-                    keyboard: None,
-                }],
-                cursors: Cursors::default(),
-                status: Some(StudioRecordingStatus::Complete),
-            },
-        };
-    }
-
-    match studio_meta.as_mut() {
-        StudioRecordingMeta::MultipleSegments { inner } => Ok(inner),
-        StudioRecordingMeta::SingleSegment { .. } => {
-            Err("Failed to normalize project recording segments".to_string())
-        }
-    }
-}
-
-fn get_video_duration_secs(path: &Path) -> Result<f64, String> {
-    get_media_duration(path)
-        .map(|duration| duration.as_secs_f64())
-        .ok_or_else(|| format!("Could not determine video duration: {}", path.display()))
-}
-
-fn full_timeline_for_segments(
-    project_path: &Path,
-    segments: &[MultipleSegment],
-) -> Result<Vec<TimelineSegment>, String> {
-    segments
-        .iter()
-        .enumerate()
-        .map(|(index, segment)| {
-            let duration = get_video_duration_secs(&segment.display.path.to_path(project_path))?;
-            Ok(TimelineSegment {
-                recording_clip: index as u32,
-                timescale: 1.0,
-                start: 0.0,
-                end: duration,
-            })
-        })
-        .collect()
-}
-
 fn get_source_video_duration_secs(
     source_meta: &RecordingMeta,
     video: &VideoMeta,
@@ -273,7 +219,7 @@ fn get_source_video_duration_secs(
         "video",
         VIDEO_IMPORT_EXTENSIONS,
     )?;
-    get_video_duration_secs(&source_path)
+    video_duration_secs(&source_path).map_err(|e| e.to_string())
 }
 
 fn full_timeline_for_source_segments(
@@ -293,71 +239,6 @@ fn full_timeline_for_source_segments(
             })
         })
         .collect()
-}
-
-fn ensure_project_timeline<'a>(
-    config: &'a mut ProjectConfiguration,
-    project_path: &Path,
-    segments: &[MultipleSegment],
-) -> Result<&'a mut TimelineConfiguration, String> {
-    if config.timeline.is_none() {
-        config.timeline = Some(TimelineConfiguration {
-            segments: full_timeline_for_segments(project_path, segments)?,
-            zoom_segments: Vec::new(),
-            scene_segments: Vec::new(),
-            mask_segments: Vec::new(),
-            text_segments: Vec::new(),
-            caption_segments: Vec::new(),
-            keyboard_segments: Vec::new(),
-            sfx_segments: Vec::new(),
-            overlay_segments: Vec::new(),
-        });
-    }
-
-    config
-        .timeline
-        .as_mut()
-        .ok_or_else(|| "Failed to prepare project timeline".to_string())
-}
-
-fn add_clip_configs(
-    config: &mut ProjectConfiguration,
-    base_index: u32,
-    segments: &[MultipleSegment],
-) {
-    for (offset, segment) in segments.iter().enumerate() {
-        let index = base_index + offset as u32;
-        let offsets = segment.calculate_audio_offsets();
-
-        if let Some(existing) = config.clips.iter_mut().find(|clip| clip.index == index) {
-            existing.offsets = offsets;
-        } else {
-            config.clips.push(ClipConfiguration { index, offsets });
-        }
-    }
-}
-
-fn unique_segment_dir(
-    project_path: &Path,
-    index: u32,
-) -> Result<(PathBuf, String), std::io::Error> {
-    let segments_root = project_path.join("content").join("segments");
-    std::fs::create_dir_all(&segments_root)?;
-
-    let mut counter = 0;
-    loop {
-        let name = if counter == 0 {
-            format!("segment-{index}")
-        } else {
-            format!("segment-{index}-import-{counter}")
-        };
-        let path = segments_root.join(&name);
-        if !path.exists() {
-            std::fs::create_dir_all(&path)?;
-            return Ok((path, format!("content/segments/{name}")));
-        }
-        counter += 1;
-    }
 }
 
 fn relative_file_extension(path: &RelativePathBuf, fallback: &str) -> String {
@@ -764,17 +645,6 @@ fn copy_cursor_events_path(
     Ok(Some(target_relative_path))
 }
 
-fn single_segment_to_multiple(segment: &SingleSegment) -> MultipleSegment {
-    MultipleSegment {
-        display: segment.display.clone(),
-        camera: segment.camera.clone(),
-        mic: segment.audio.clone(),
-        system_audio: None,
-        cursor: segment.cursor.clone(),
-        keyboard: None,
-    }
-}
-
 fn studio_segments_for_import(studio_meta: &StudioRecordingMeta) -> Vec<MultipleSegment> {
     match studio_meta {
         StudioRecordingMeta::SingleSegment { segment } => {
@@ -1026,142 +896,19 @@ async fn append_mp4_to_editor_project(
         return Err("Select an MP4 video file to import".to_string());
     }
 
-    let mut target_meta = RecordingMeta::load_for_project(&target_project_path)
-        .map_err(|e| format!("Failed to load target project metadata: {e}"))?;
-    let mut config = ProjectConfiguration::load(&target_project_path).unwrap_or_default();
-    let existing_segments = {
-        let inner = ensure_multiple_segments(&mut target_meta)?;
-        inner.status = Some(StudioRecordingStatus::Complete);
-        inner.segments.clone()
-    };
-    ensure_project_timeline(&mut config, &target_project_path, &existing_segments)?;
-
-    let new_index = existing_segments.len() as u32;
-    let (_, target_relative_dir) = unique_segment_dir(&target_project_path, new_index)
-        .map_err(|e| format!("Failed to create imported segment directory: {e}"))?;
-
-    let output_video_relative_path =
-        RelativePathBuf::from(format!("{target_relative_dir}/display.mp4"));
-    let output_audio_relative_path =
-        RelativePathBuf::from(format!("{target_relative_dir}/audio.ogg"));
-    let output_video_path = output_video_relative_path.to_path(&target_project_path);
-    let output_audio_path = output_audio_relative_path.to_path(&target_project_path);
     let project_path_str = target_project_path.to_string_lossy().to_string();
-
-    emit_progress(
-        &app,
-        &project_path_str,
-        ImportStage::Probing,
-        0.0,
-        "Analyzing video file...",
-    );
-
-    let can_decode =
-        probe_video_can_decode(&source_path).map_err(|e| format!("Cannot decode video: {e}"))?;
-    if !can_decode {
-        return Err("Video format not supported or file is corrupted".to_string());
-    }
-
-    emit_progress(
-        &app,
-        &project_path_str,
-        ImportStage::Converting,
-        0.0,
-        "Starting conversion...",
-    );
-
-    let app_for_transcode = app.clone();
-    let source_path_for_transcode = source_path.clone();
-    let output_video_path_for_transcode = output_video_path.clone();
-    let output_audio_path_for_transcode = output_audio_path.clone();
-    let project_path_str_for_transcode = project_path_str.clone();
-    let target_project_path_for_transcode = target_project_path.clone();
-
-    let TranscodeOutput { fps, sample_rate } = tokio::task::spawn_blocking(move || {
-        transcode_video(
-            &source_path_for_transcode,
-            &output_video_path_for_transcode,
-            Some(&output_audio_path_for_transcode),
-            |progress| {
-                emit_progress(
-                    &app_for_transcode,
-                    &project_path_str_for_transcode,
-                    ImportStage::Converting,
-                    progress,
-                    &format!("Converting video... {}%", (progress * 100.0) as u32),
-                )
+    tokio::task::spawn_blocking(move || {
+        append_video_to_project(
+            &target_project_path,
+            &source_path,
+            |stage, progress, message| {
+                emit_progress(&app, &project_path_str, stage, progress, message)
             },
-            || !cap_video_import::check_project_exists(&target_project_path_for_transcode),
         )
     })
     .await
     .map_err(|e| format!("Video import task failed: {e}"))?
     .map_err(|e| e.to_string())?;
-
-    let duration = get_video_duration_secs(&output_video_path)?;
-    let audio_file_size = std::fs::metadata(&output_audio_path)
-        .map(|metadata| metadata.len())
-        .unwrap_or(0);
-    const MIN_VALID_AUDIO_SIZE: u64 = 1000;
-    let system_audio = if sample_rate.is_some() && audio_file_size > MIN_VALID_AUDIO_SIZE {
-        Some(AudioMeta {
-            path: output_audio_relative_path,
-            start_time: Some(0.0),
-            device_id: None,
-            gap_summary: None,
-        })
-    } else {
-        None
-    };
-
-    let imported_segment = MultipleSegment {
-        display: VideoMeta {
-            path: output_video_relative_path,
-            fps,
-            start_time: Some(0.0),
-            device_id: None,
-        },
-        camera: None,
-        mic: None,
-        system_audio,
-        cursor: None,
-        keyboard: None,
-    };
-
-    {
-        let inner = ensure_multiple_segments(&mut target_meta)?;
-        inner.status = Some(StudioRecordingStatus::Complete);
-        inner.segments.push(imported_segment.clone());
-    }
-
-    ensure_project_timeline(&mut config, &target_project_path, &existing_segments)?
-        .segments
-        .push(TimelineSegment {
-            recording_clip: new_index,
-            timescale: 1.0,
-            start: 0.0,
-            end: duration,
-        });
-    add_clip_configs(
-        &mut config,
-        new_index,
-        std::slice::from_ref(&imported_segment),
-    );
-
-    target_meta
-        .save_for_project()
-        .map_err(|e| format!("Failed to save project metadata: {e:?}"))?;
-    config
-        .write(&target_project_path)
-        .map_err(|e| format!("Failed to save project config: {e}"))?;
-
-    emit_progress(
-        &app,
-        &project_path_str,
-        ImportStage::Complete,
-        1.0,
-        "Import complete!",
-    );
 
     Ok(1)
 }
@@ -1205,14 +952,15 @@ async fn append_cap_project_to_editor_project(
         .map_err(|e| format!("Failed to load target project metadata: {e}"))?;
     let mut config = ProjectConfiguration::load(&target_project_path).unwrap_or_default();
     let existing_segments = {
-        let inner = ensure_multiple_segments(&mut target_meta)?;
+        let inner = ensure_multiple_segments(&mut target_meta).map_err(|e| e.to_string())?;
         inner.status = Some(StudioRecordingStatus::Complete);
         inner.segments.clone()
     };
-    ensure_project_timeline(&mut config, &target_project_path, &existing_segments)?;
+    ensure_project_timeline(&mut config, &target_project_path, &existing_segments)
+        .map_err(|e| e.to_string())?;
 
     let (base_index, copied_segments, source_to_target_index) = {
-        let inner = ensure_multiple_segments(&mut target_meta)?;
+        let inner = ensure_multiple_segments(&mut target_meta).map_err(|e| e.to_string())?;
         inner.status = Some(StudioRecordingStatus::Complete);
         let base_index = inner.segments.len() as u32;
         let import_token = format!("import-{}", uuid::Uuid::new_v4().simple());
@@ -1258,7 +1006,8 @@ async fn append_cap_project_to_editor_project(
 
     {
         let timeline =
-            ensure_project_timeline(&mut config, &target_project_path, &existing_segments)?;
+            ensure_project_timeline(&mut config, &target_project_path, &existing_segments)
+                .map_err(|e| e.to_string())?;
         for source_segment in source_timeline {
             let Some(target_index) = source_to_target_index.get(&source_segment.recording_clip)
             else {

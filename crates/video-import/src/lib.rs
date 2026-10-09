@@ -1,10 +1,16 @@
 use serde::Serialize;
 use specta::Type;
 
+mod append;
 mod import;
 mod thumbnail;
 mod transcode;
 
+pub use append::{
+    AppendedSegment, add_clip_configs, append_video_to_project, ensure_multiple_segments,
+    ensure_project_timeline, full_timeline_for_segments, single_segment_to_multiple,
+    unique_segment_dir, video_duration_secs,
+};
 pub use import::{
     ImportedVideo, PreparedImport, check_project_exists, generate_project_name,
     prepare_video_import, sanitize_filename, unique_project_path,
@@ -41,4 +47,12 @@ pub enum ImportError {
     MetaSaveFailed(String),
     #[error("Import cancelled")]
     Cancelled,
+    #[error("Failed to load project {0}")]
+    ProjectLoadFailed(String),
+    #[error("Instant mode recordings cannot be edited")]
+    InstantRecording,
+    #[error("Could not determine video duration: {0}")]
+    UnknownDuration(String),
+    #[error("Failed to save project config: {0}")]
+    ConfigSaveFailed(String),
 }

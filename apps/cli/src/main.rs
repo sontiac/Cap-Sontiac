@@ -219,6 +219,8 @@ enum ProjectCommands {
     Validate(ProjectTarget),
     /// Read or write a project's editor configuration (project-config.json)
     Config(ProjectConfigArgs),
+    /// Transcode a video file and append it to a project as a new recording segment
+    Append(import::AppendArgs),
 }
 
 #[derive(Args)]
@@ -508,6 +510,7 @@ impl ProjectArgs {
                     )
                 }
             },
+            ProjectCommands::Append(args) => args.run(json),
         }
     }
 }

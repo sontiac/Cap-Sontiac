@@ -604,6 +604,109 @@ fn guide_lists_import_command() {
     assert!(commands.contains(&"import"));
 }
 
+#[test]
+fn project_append_missing_source_emits_json_error_event() {
+    let dir = tempfile::tempdir().unwrap();
+    let project = dir.path().join("p.cap");
+    write_single_segment_meta(&project);
+    let output = run(&[
+        "project",
+        "append",
+        project.to_str().unwrap(),
+        dir.path().join("nope.mp4").to_str().unwrap(),
+        "--json",
+    ]);
+    assert_eq!(output.status.code(), Some(1));
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let event: serde_json::Value = serde_json::from_str(stdout.lines().last().unwrap()).unwrap();
+    assert_eq!(event["type"], "error");
+    assert!(event["error"].as_str().unwrap().contains("nope.mp4"));
+}
+
+#[test]
+fn guide_lists_project_append_command() {
+    let output = run(&["guide", "--json"]);
+    assert!(output.status.success());
+    let guide: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert!(
+        guide["commands"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|c| c["command"] == "project append")
+    );
+}
+
+fn generate_test_clip(output_path: &Path) {
+    let status = Command::new("ffmpeg")
+        .args([
+            "-y",
+            "-f",
+            "lavfi",
+            "-i",
+            "testsrc=duration=1:size=180x320:rate=30",
+            "-c:v",
+            "libx264",
+            "-preset",
+            "ultrafast",
+            "-pix_fmt",
+            "yuv420p",
+            output_path.to_str().unwrap(),
+        ])
+        .output()
+        .expect("ffmpeg must be installed to run this test");
+    assert!(
+        status.status.success(),
+        "ffmpeg failed: {}",
+        String::from_utf8_lossy(&status.stderr)
+    );
+}
+
+fn last_event(output: &Output) -> Value {
+    let text = stdout(output);
+    serde_json::from_str(text.lines().last().expect("no NDJSON events")).unwrap()
+}
+
+#[test]
+fn import_then_append_builds_a_two_segment_project() {
+    let dir = tempfile::tempdir().unwrap();
+    let clip = dir.path().join("clip.mp4");
+    generate_test_clip(&clip);
+
+    let imported = run(&[
+        "import",
+        clip.to_str().unwrap(),
+        "--dir",
+        dir.path().to_str().unwrap(),
+        "--json",
+    ]);
+    assert!(imported.status.success(), "stderr: {}", stderr(&imported));
+    let completed = last_event(&imported);
+    let project = completed["projectPath"].as_str().unwrap().to_string();
+
+    let appended = run(&[
+        "project",
+        "append",
+        &project,
+        clip.to_str().unwrap(),
+        "--json",
+    ]);
+    assert!(appended.status.success(), "stderr: {}", stderr(&appended));
+    let event = last_event(&appended);
+    assert_eq!(event["type"], "completed");
+    assert_eq!(event["segmentIndex"], 1);
+    assert_eq!(event["hasAudio"], false);
+
+    let config = parse_json(&run(&["project", "config", "get", &project, "--json"]));
+    let clips: Vec<u64> = config["timeline"]["segments"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|segment| segment["recordingSegment"].as_u64().unwrap())
+        .collect();
+    assert_eq!(clips, vec![0, 1]);
+}
+
 fn write_single_segment_meta(project: &Path) {
     std::fs::create_dir_all(project).unwrap();
     let meta = serde_json::json!({
