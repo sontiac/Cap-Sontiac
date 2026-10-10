@@ -254,7 +254,10 @@ fn build() -> Guide {
                     "Transcodes the file (one re-encode, rotation honored) into a new recording segment and \
                      appends it to the end of the timeline, as the desktop editor's add-clip does. A source \
                      with no audio track becomes a silent segment. Use it to build one project from several \
-                     recordings, then rearrange the timeline with `project config set`.",
+                     recordings, then rearrange the timeline with `project config set`. \
+                     `--camera <file>` attaches a second video as the segment's camera track (drawn as \
+                     the camera overlay per the project's camera settings), with that file's audio as \
+                     the segment's mic track.",
                 ),
                 ..cmd(
                     "project append",

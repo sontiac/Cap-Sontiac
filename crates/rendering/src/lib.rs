@@ -588,7 +588,9 @@ pub async fn render_video_to_channel(
 
     if let Some(first_segment) = render_segments.first() {
         let (screen_w, screen_h) = first_segment.decoders.screen_video_dimensions();
-        let camera_dims = first_segment.decoders.camera_video_dimensions();
+        let camera_dims = render_segments
+            .iter()
+            .find_map(|segment| segment.decoders.camera_video_dimensions());
         layers.prepare_for_video_dimensions(
             &constants.device,
             screen_w,
@@ -945,7 +947,9 @@ pub async fn render_video_to_channel_nv12(
 
     if let Some(first_segment) = render_segments.first() {
         let (screen_w, screen_h) = first_segment.decoders.screen_video_dimensions();
-        let camera_dims = first_segment.decoders.camera_video_dimensions();
+        let camera_dims = render_segments
+            .iter()
+            .find_map(|segment| segment.decoders.camera_video_dimensions());
         layers.prepare_for_video_dimensions(
             &constants.device,
             screen_w,
@@ -1526,9 +1530,9 @@ impl RenderVideoConstants {
 
         let options = RenderOptions {
             screen_size: XY::new(first_segment.display.width, first_segment.display.height),
-            camera_size: first_segment
-                .camera
-                .as_ref()
+            camera_size: segments
+                .iter()
+                .find_map(|segment| segment.camera.as_ref())
                 .map(|c| XY::new(c.width, c.height)),
         };
 
@@ -1584,9 +1588,9 @@ impl RenderVideoConstants {
 
         let options = RenderOptions {
             screen_size: XY::new(first_segment.display.width, first_segment.display.height),
-            camera_size: first_segment
-                .camera
-                .as_ref()
+            camera_size: segments
+                .iter()
+                .find_map(|segment| segment.camera.as_ref())
                 .map(|c| XY::new(c.width, c.height)),
         };
 

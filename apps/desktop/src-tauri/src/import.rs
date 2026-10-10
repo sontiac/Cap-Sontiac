@@ -5,8 +5,9 @@ use cap_project::{
     StudioRecordingStatus, TimelineSegment, VideoMeta, XY,
 };
 use cap_video_import::{
-    ImportError, ImportStage, add_clip_configs, append_video_to_project, ensure_multiple_segments,
-    ensure_project_timeline, single_segment_to_multiple, unique_segment_dir, video_duration_secs,
+    AppendSources, ImportError, ImportStage, add_clip_configs, append_video_to_project,
+    ensure_multiple_segments, ensure_project_timeline, single_segment_to_multiple,
+    unique_segment_dir, video_duration_secs,
 };
 use image::ImageEncoder;
 use relative_path::{Component as RelativeComponent, RelativePathBuf};
@@ -900,7 +901,10 @@ async fn append_mp4_to_editor_project(
     tokio::task::spawn_blocking(move || {
         append_video_to_project(
             &target_project_path,
-            &source_path,
+            &AppendSources {
+                display: &source_path,
+                camera: None,
+            },
             |stage, progress, message| {
                 emit_progress(&app, &project_path_str, stage, progress, message)
             },

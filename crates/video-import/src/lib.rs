@@ -8,9 +8,9 @@ mod thumbnail;
 mod transcode;
 
 pub use append::{
-    AppendedSegment, add_clip_configs, append_video_to_project, ensure_multiple_segments,
-    ensure_project_timeline, full_timeline_for_segments, single_segment_to_multiple,
-    unique_segment_dir, video_duration_secs,
+    AppendSources, AppendedSegment, add_clip_configs, append_video_to_project,
+    ensure_multiple_segments, ensure_project_timeline, full_timeline_for_segments,
+    single_segment_to_multiple, unique_segment_dir, video_duration_secs,
 };
 pub use import::{
     ImportedVideo, PreparedImport, check_project_exists, generate_project_name,

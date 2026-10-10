@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 
 use cap_video_import::{
-    ImportStage, append_video_to_project, prepare_video_import, unique_project_path,
+    AppendSources, ImportStage, append_video_to_project, prepare_video_import, unique_project_path,
 };
 use clap::Args;
 use serde::Serialize;
@@ -42,8 +42,11 @@ enum ImportEvent<'a> {
 pub struct AppendArgs {
     /// Path to the .cap project to extend
     pub project_path: PathBuf,
-    /// Path to the source video file
+    /// Path to the source video file (the segment's main video)
     pub source: PathBuf,
+    /// Video file to attach as the segment's camera track; its audio becomes the segment's mic track
+    #[arg(long)]
+    pub camera: Option<PathBuf>,
 }
 
 #[derive(Serialize)]
@@ -62,6 +65,7 @@ enum AppendEvent<'a> {
         segment_index: u32,
         fps: u32,
         has_audio: bool,
+        has_camera: bool,
         duration_secs: f64,
     },
     Error {
@@ -153,6 +157,11 @@ impl AppendArgs {
         if !self.source.is_file() {
             return Err(format!("Source video not found: {}", self.source.display()));
         }
+        if let Some(camera) = &self.camera
+            && !camera.is_file()
+        {
+            return Err(format!("Camera video not found: {}", camera.display()));
+        }
         if !cap_video_import::check_project_exists(&self.project_path) {
             return Err(format!(
                 "Not a Cap project (missing recording-meta.json): {}",
@@ -163,7 +172,10 @@ impl AppendArgs {
         let mut last_stage = None;
         let appended = append_video_to_project(
             &self.project_path,
-            &self.source,
+            &AppendSources {
+                display: &self.source,
+                camera: self.camera.as_deref(),
+            },
             |stage, progress, message| {
                 if json {
                     let _ = write_json_line(&AppendEvent::Progress {
@@ -184,6 +196,7 @@ impl AppendArgs {
                 segment_index: appended.index,
                 fps: appended.fps,
                 has_audio: appended.has_audio,
+                has_camera: appended.has_camera,
                 duration_secs: appended.duration_secs,
             })
         } else {

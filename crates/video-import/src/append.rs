@@ -17,10 +17,11 @@ pub struct AppendedSegment {
     pub index: u32,
     pub fps: u32,
     pub has_audio: bool,
+    pub has_camera: bool,
     pub duration_secs: f64,
 }
 
-pub(crate) fn imported_system_audio(
+pub(crate) fn imported_audio(
     sample_rate: Option<u32>,
     audio_path: &Path,
     relative_path: RelativePathBuf,
@@ -176,6 +177,85 @@ fn load_project_config(project_path: &Path) -> Result<ProjectConfiguration, Impo
     }
 }
 
+struct TranscodedTrack {
+    video: VideoMeta,
+    audio: Option<AudioMeta>,
+    duration_secs: f64,
+}
+
+struct TrackFiles<'a> {
+    video_name: &'a str,
+    audio_name: &'a str,
+}
+
+const DISPLAY_FILES: TrackFiles<'static> = TrackFiles {
+    video_name: "display.mp4",
+    audio_name: "audio.ogg",
+};
+const CAMERA_FILES: TrackFiles<'static> = TrackFiles {
+    video_name: "camera.mp4",
+    audio_name: "mic.ogg",
+};
+
+fn probe_decodable(source_path: &Path) -> Result<(), ImportError> {
+    let can_decode = probe_video_can_decode(source_path)
+        .map_err(|e| ImportError::OpenFailed(format!("Cannot decode video: {e}")))?;
+    if can_decode {
+        Ok(())
+    } else {
+        Err(ImportError::OpenFailed(format!(
+            "Video format not supported or file is corrupted: {}",
+            source_path.display()
+        )))
+    }
+}
+
+fn transcode_track(
+    project_path: &Path,
+    source_path: &Path,
+    relative_dir: &str,
+    files: &TrackFiles,
+    progress_range: (f64, f64),
+    on_progress: &mut impl FnMut(ImportStage, f64, &str),
+) -> Result<TranscodedTrack, ImportError> {
+    let video_relative_path = RelativePathBuf::from(format!("{relative_dir}/{}", files.video_name));
+    let audio_relative_path = RelativePathBuf::from(format!("{relative_dir}/{}", files.audio_name));
+    let video_path = video_relative_path.to_path(project_path);
+    let audio_path = audio_relative_path.to_path(project_path);
+
+    let (range_start, range_end) = progress_range;
+    on_progress(
+        ImportStage::Converting,
+        range_start,
+        "Starting conversion...",
+    );
+    let transcoded = transcode_video(
+        source_path,
+        &video_path,
+        Some(&audio_path),
+        |progress| {
+            let overall = range_start + progress * (range_end - range_start);
+            on_progress(
+                ImportStage::Converting,
+                overall,
+                &format!("Converting video... {}%", (overall * 100.0) as u32),
+            )
+        },
+        || !crate::check_project_exists(project_path),
+    )?;
+
+    Ok(TranscodedTrack {
+        video: VideoMeta {
+            path: video_relative_path,
+            fps: transcoded.fps,
+            start_time: Some(0.0),
+            device_id: None,
+        },
+        audio: imported_audio(transcoded.sample_rate, &audio_path, audio_relative_path),
+        duration_secs: video_duration_secs(&video_path)?,
+    })
+}
+
 struct TranscodedSegment {
     segment: MultipleSegment,
     duration_secs: f64,
@@ -183,45 +263,51 @@ struct TranscodedSegment {
 
 fn transcode_segment(
     project_path: &Path,
-    source_path: &Path,
+    sources: &AppendSources,
     relative_dir: &str,
     on_progress: &mut impl FnMut(ImportStage, f64, &str),
 ) -> Result<TranscodedSegment, ImportError> {
-    let video_relative_path = RelativePathBuf::from(format!("{relative_dir}/display.mp4"));
-    let audio_relative_path = RelativePathBuf::from(format!("{relative_dir}/audio.ogg"));
-    let video_path = video_relative_path.to_path(project_path);
-    let audio_path = audio_relative_path.to_path(project_path);
-
-    on_progress(ImportStage::Converting, 0.0, "Starting conversion...");
-    let transcoded = transcode_video(
-        source_path,
-        &video_path,
-        Some(&audio_path),
-        |progress| {
-            on_progress(
-                ImportStage::Converting,
-                progress,
-                &format!("Converting video... {}%", (progress * 100.0) as u32),
-            )
-        },
-        || !crate::check_project_exists(project_path),
+    let display_range = if sources.camera.is_some() {
+        (0.0, 0.47)
+    } else {
+        (0.0, 0.94)
+    };
+    let display = transcode_track(
+        project_path,
+        sources.display,
+        relative_dir,
+        &DISPLAY_FILES,
+        display_range,
+        on_progress,
     )?;
+    let camera = sources
+        .camera
+        .map(|camera_source| {
+            transcode_track(
+                project_path,
+                camera_source,
+                relative_dir,
+                &CAMERA_FILES,
+                (0.47, 0.94),
+                on_progress,
+            )
+        })
+        .transpose()?;
 
-    let duration_secs = video_duration_secs(&video_path)?;
-    let system_audio =
-        imported_system_audio(transcoded.sample_rate, &audio_path, audio_relative_path);
+    let duration_secs = camera.as_ref().map_or(display.duration_secs, |camera| {
+        display.duration_secs.min(camera.duration_secs)
+    });
+    let (camera_video, mic) = match camera {
+        Some(camera) => (Some(camera.video), camera.audio),
+        None => (None, None),
+    };
 
     Ok(TranscodedSegment {
         segment: MultipleSegment {
-            display: VideoMeta {
-                path: video_relative_path,
-                fps: transcoded.fps,
-                start_time: Some(0.0),
-                device_id: None,
-            },
-            camera: None,
-            mic: None,
-            system_audio,
+            display: display.video,
+            camera: camera_video,
+            mic,
+            system_audio: display.audio,
             cursor: None,
             keyboard: None,
         },
@@ -229,9 +315,14 @@ fn transcode_segment(
     })
 }
 
+pub struct AppendSources<'a> {
+    pub display: &'a Path,
+    pub camera: Option<&'a Path>,
+}
+
 pub fn append_video_to_project(
     project_path: &Path,
-    source_path: &Path,
+    sources: &AppendSources,
     mut on_progress: impl FnMut(ImportStage, f64, &str),
 ) -> Result<AppendedSegment, ImportError> {
     let mut meta = RecordingMeta::load_for_project(project_path)
@@ -245,31 +336,28 @@ pub fn append_video_to_project(
     ensure_project_timeline(&mut config, project_path, &existing_segments)?;
 
     on_progress(ImportStage::Probing, 0.0, "Analyzing video file...");
-    let can_decode = probe_video_can_decode(source_path)
-        .map_err(|e| ImportError::OpenFailed(format!("Cannot decode video: {e}")))?;
-    if !can_decode {
-        return Err(ImportError::OpenFailed(
-            "Video format not supported or file is corrupted".to_string(),
-        ));
+    probe_decodable(sources.display)?;
+    if let Some(camera_source) = sources.camera {
+        probe_decodable(camera_source)?;
     }
 
     let index = existing_segments.len() as u32;
     let (segment_dir, relative_dir) =
         unique_segment_dir(project_path, index).map_err(ImportError::DirectoryFailed)?;
 
-    let transcoded =
-        match transcode_segment(project_path, source_path, &relative_dir, &mut on_progress) {
-            Ok(transcoded) => transcoded,
-            Err(e) => {
-                if let Err(cleanup_error) = std::fs::remove_dir_all(&segment_dir) {
-                    warn!(
-                        "Failed to remove partial segment directory {}: {cleanup_error}",
-                        segment_dir.display()
-                    );
-                }
-                return Err(e);
+    let transcoded = match transcode_segment(project_path, sources, &relative_dir, &mut on_progress)
+    {
+        Ok(transcoded) => transcoded,
+        Err(e) => {
+            if let Err(cleanup_error) = std::fs::remove_dir_all(&segment_dir) {
+                warn!(
+                    "Failed to remove partial segment directory {}: {cleanup_error}",
+                    segment_dir.display()
+                );
             }
-        };
+            return Err(e);
+        }
+    };
 
     on_progress(
         ImportStage::Finalizing,
@@ -284,7 +372,8 @@ pub fn append_video_to_project(
     let appended = AppendedSegment {
         index,
         fps: segment.display.fps,
-        has_audio: segment.system_audio.is_some(),
+        has_audio: segment.system_audio.is_some() || segment.mic.is_some(),
+        has_camera: segment.camera.is_some(),
         duration_secs,
     };
 
@@ -309,7 +398,7 @@ pub fn append_video_to_project(
 
     info!(
         "Appended {} to {} as segment {index}",
-        source_path.display(),
+        sources.display.display(),
         project_path.display()
     );
     on_progress(ImportStage::Complete, 1.0, "Import complete!");

@@ -1017,15 +1017,15 @@ function transformMeta({ pretty_name, ...rawMeta }: RecordingMeta) {
 		prettyName: pretty_name,
 		hasCamera: (() => {
 			if (meta.type === "single") return !!meta.camera;
-			return !!meta.segments[0].camera;
+			return meta.segments.some((s) => !!s.camera);
 		})(),
 		hasSystemAudio: (() => {
 			if (meta.type === "single") return false;
-			return !!meta.segments[0].system_audio;
+			return meta.segments.some((s) => !!s.system_audio);
 		})(),
 		hasMicrophone: (() => {
 			if (meta.type === "single") return !!meta.audio;
-			return !!meta.segments[0].mic;
+			return meta.segments.some((s) => !!s.mic);
 		})(),
 		hasRecordedCursorData: (() => {
 			if (meta.type === "single") return !!meta.cursor;

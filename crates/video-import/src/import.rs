@@ -9,7 +9,7 @@ use relative_path::RelativePathBuf;
 use tracing::{error, info};
 
 use crate::{
-    ImportError, ImportStage, append::imported_system_audio, thumbnail::write_video_thumbnail,
+    ImportError, ImportStage, append::imported_audio, thumbnail::write_video_thumbnail,
     transcode::transcode_video,
 };
 
@@ -126,7 +126,7 @@ impl PreparedImport {
             "Creating project metadata...",
         );
 
-        let system_audio = imported_system_audio(
+        let system_audio = imported_audio(
             transcoded.sample_rate,
             &output_audio_path,
             RelativePathBuf::from("content/segments/segment-0/audio.ogg"),
