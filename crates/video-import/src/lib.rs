@@ -2,6 +2,7 @@ use serde::Serialize;
 use specta::Type;
 
 mod append;
+mod hdr;
 mod import;
 mod thumbnail;
 mod transcode;

@@ -14,7 +14,7 @@ use ffmpeg::{
 };
 use tracing::info;
 
-use crate::ImportError;
+use crate::{ImportError, hdr::HdrConversion};
 
 pub struct TranscodeOutput {
     pub fps: u32,
@@ -450,6 +450,7 @@ pub fn transcode_video(
 
     let mut scaler: Option<ffmpeg::software::scaling::Context> = None;
     let mut rotation_format_converter: Option<ffmpeg::software::scaling::Context> = None;
+    let mut hdr_conversion = HdrConversion::Pending;
 
     for (stream, packet) in input.packets() {
         let stream_index = stream.index();
@@ -463,13 +464,15 @@ pub fn transcode_video(
                     / video_time_base.denominator().max(1) as f64;
                 let duration = StdDuration::from_secs_f64(time_secs.max(0.0));
 
+                let sdr_owned = hdr_conversion.convert_to_sdr(&video_frame)?;
+                let decoded_frame = sdr_owned.as_ref().unwrap_or(&video_frame);
                 let rotated_owned = prepare_rotated_yuv420p(
-                    &video_frame,
+                    decoded_frame,
                     rotation,
                     &mut rotation_format_converter,
                 )?;
                 let frame_for_scaling: &ffmpeg::frame::Video =
-                    rotated_owned.as_ref().unwrap_or(&video_frame);
+                    rotated_owned.as_ref().unwrap_or(decoded_frame);
 
                 let frame_to_encode = if frame_for_scaling.format()
                     != ffmpeg::format::Pixel::YUV420P
@@ -553,10 +556,12 @@ pub fn transcode_video(
             / video_time_base.denominator().max(1) as f64;
         let duration = StdDuration::from_secs_f64(time_secs.max(0.0));
 
+        let sdr_owned = hdr_conversion.convert_to_sdr(&video_frame)?;
+        let decoded_frame = sdr_owned.as_ref().unwrap_or(&video_frame);
         let rotated_owned =
-            prepare_rotated_yuv420p(&video_frame, rotation, &mut rotation_format_converter)?;
+            prepare_rotated_yuv420p(decoded_frame, rotation, &mut rotation_format_converter)?;
         let frame_for_scaling: &ffmpeg::frame::Video =
-            rotated_owned.as_ref().unwrap_or(&video_frame);
+            rotated_owned.as_ref().unwrap_or(decoded_frame);
 
         let frame_to_encode = if frame_for_scaling.format() != ffmpeg::format::Pixel::YUV420P
             || frame_for_scaling.width() != output_width
