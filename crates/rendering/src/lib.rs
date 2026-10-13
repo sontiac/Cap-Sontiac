@@ -379,26 +379,27 @@ impl RecordingSegmentDecoders {
                 )
             );
 
-            let camera_frame = camera.flatten();
+            let camera = SegmentCameraFrame::from_decode(camera);
 
             Some(DecodedSegmentFrames {
                 screen_frame: Some(screen?),
-                camera_frame,
+                camera,
                 segment_time,
                 recording_time: segment_time + self.segment_offset as f32,
             })
         } else {
-            let camera_frame = OptionFuture::from(
-                needs_camera
-                    .then(|| {
-                        self.camera
-                            .as_ref()
-                            .map(|d| d.get_frame(camera_request_time))
-                    })
-                    .flatten(),
-            )
-            .await
-            .flatten();
+            let camera = SegmentCameraFrame::from_decode(
+                OptionFuture::from(
+                    needs_camera
+                        .then(|| {
+                            self.camera
+                                .as_ref()
+                                .map(|d| d.get_frame(camera_request_time))
+                        })
+                        .flatten(),
+                )
+                .await,
+            );
 
             tracing::debug!(
                 segment_time,
@@ -407,7 +408,7 @@ impl RecordingSegmentDecoders {
 
             Some(DecodedSegmentFrames {
                 screen_frame: None,
-                camera_frame,
+                camera,
                 segment_time,
                 recording_time: segment_time + self.segment_offset as f32,
             })
@@ -436,26 +437,27 @@ impl RecordingSegmentDecoders {
                 )
             );
 
-            let camera_frame = camera.flatten();
+            let camera = SegmentCameraFrame::from_decode(camera);
 
             Some(DecodedSegmentFrames {
                 screen_frame: Some(screen?),
-                camera_frame,
+                camera,
                 segment_time,
                 recording_time: segment_time + self.segment_offset as f32,
             })
         } else {
-            let camera_frame = OptionFuture::from(
-                needs_camera
-                    .then(|| {
-                        self.camera
-                            .as_ref()
-                            .map(|d| d.get_frame_initial(camera_request_time))
-                    })
-                    .flatten(),
-            )
-            .await
-            .flatten();
+            let camera = SegmentCameraFrame::from_decode(
+                OptionFuture::from(
+                    needs_camera
+                        .then(|| {
+                            self.camera
+                                .as_ref()
+                                .map(|d| d.get_frame_initial(camera_request_time))
+                        })
+                        .flatten(),
+                )
+                .await,
+            );
 
             tracing::debug!(
                 segment_time,
@@ -464,7 +466,7 @@ impl RecordingSegmentDecoders {
 
             Some(DecodedSegmentFrames {
                 screen_frame: None,
-                camera_frame,
+                camera,
                 segment_time,
                 recording_time: segment_time + self.segment_offset as f32,
             })
@@ -3598,9 +3600,33 @@ mod tests {
 }
 
 #[derive(Clone)]
+pub enum SegmentCameraFrame {
+    Absent,
+    Pending,
+    Decoded(DecodedFrame),
+}
+
+impl SegmentCameraFrame {
+    fn from_decode(decoded: Option<Option<DecodedFrame>>) -> Self {
+        match decoded {
+            None => Self::Absent,
+            Some(None) => Self::Pending,
+            Some(Some(frame)) => Self::Decoded(frame),
+        }
+    }
+
+    pub fn decoded(&self) -> Option<&DecodedFrame> {
+        match self {
+            Self::Decoded(frame) => Some(frame),
+            Self::Absent | Self::Pending => None,
+        }
+    }
+}
+
+#[derive(Clone)]
 pub struct DecodedSegmentFrames {
     pub screen_frame: Option<DecodedFrame>,
-    pub camera_frame: Option<DecodedFrame>,
+    pub camera: SegmentCameraFrame,
     pub segment_time: f32,
     pub recording_time: f32,
 }
@@ -4240,28 +4266,23 @@ impl RendererLayers {
             constants,
         );
 
+        if matches!(segment_frames.camera, SegmentCameraFrame::Absent) {
+            self.camera.clear();
+            self.camera_only.clear();
+        }
+
         self.camera.prepare(
             &constants.device,
             &constants.queue,
             uniforms.camera,
-            constants.options.camera_size.and_then(|size| {
-                segment_frames
-                    .camera_frame
-                    .as_ref()
-                    .map(|frame| (size, frame, segment_frames.recording_time))
-            }),
+            camera_frame_data(constants, segment_frames),
         );
 
         self.camera_only.prepare(
             &constants.device,
             &constants.queue,
             uniforms.camera_only,
-            constants.options.camera_size.and_then(|size| {
-                segment_frames
-                    .camera_frame
-                    .as_ref()
-                    .map(|frame| (size, frame, segment_frames.recording_time))
-            }),
+            camera_frame_data(constants, segment_frames),
         );
 
         if let Some(mode) = blur_mode_from_config(&uniforms.project.camera.background_blur) {
@@ -4379,16 +4400,15 @@ impl RendererLayers {
         timings.cursor_prepare_duration = start.elapsed();
 
         let start = Instant::now();
+        if matches!(segment_frames.camera, SegmentCameraFrame::Absent) {
+            self.camera.clear();
+            self.camera_only.clear();
+        }
         self.camera.prepare_with_encoder(
             &constants.device,
             &constants.queue,
             uniforms.camera,
-            constants.options.camera_size.and_then(|size| {
-                segment_frames
-                    .camera_frame
-                    .as_ref()
-                    .map(|frame| (size, frame, segment_frames.recording_time))
-            }),
+            camera_frame_data(constants, segment_frames),
             encoder,
         );
         timings.camera_prepare_duration = start.elapsed();
@@ -4398,12 +4418,7 @@ impl RendererLayers {
             &constants.device,
             &constants.queue,
             uniforms.camera_only,
-            constants.options.camera_size.and_then(|size| {
-                segment_frames
-                    .camera_frame
-                    .as_ref()
-                    .map(|frame| (size, frame, segment_frames.recording_time))
-            }),
+            camera_frame_data(constants, segment_frames),
             encoder,
         );
         timings.camera_only_prepare_duration = start.elapsed();
@@ -4626,6 +4641,17 @@ async fn produce_frame_with_timings(
     timings.finish_submit_readback_duration = finish_timings.submit_readback_duration;
 
     Ok((frame, timings))
+}
+
+fn camera_frame_data<'a>(
+    constants: &RenderVideoConstants,
+    segment_frames: &'a DecodedSegmentFrames,
+) -> Option<(XY<u32>, &'a DecodedFrame, f32)> {
+    constants
+        .options
+        .camera_size
+        .zip(segment_frames.camera.decoded())
+        .map(|(size, frame)| (size, frame, segment_frames.recording_time))
 }
 
 fn blur_mode_from_config(

@@ -742,3 +742,123 @@ fn config_set_rejects_unknown_fields() {
             .contains("$.timeline.segemnts")
     );
 }
+
+fn generate_color_clip(output_path: &Path, color: &str) {
+    let output = Command::new("ffmpeg")
+        .args([
+            "-y",
+            "-f",
+            "lavfi",
+            "-i",
+            &format!("color=c={color}:size=180x320:rate=30:duration=2"),
+            "-c:v",
+            "libx264",
+            "-preset",
+            "ultrafast",
+            "-pix_fmt",
+            "yuv420p",
+            output_path.to_str().unwrap(),
+        ])
+        .output()
+        .expect("ffmpeg must be installed to run this test");
+    assert!(
+        output.status.success(),
+        "ffmpeg failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+fn red_pixels_at(video: &Path, seconds: f64) -> usize {
+    let output = Command::new("ffmpeg")
+        .args([
+            "-v",
+            "error",
+            "-ss",
+            &seconds.to_string(),
+            "-i",
+            video.to_str().unwrap(),
+            "-frames:v",
+            "1",
+            "-f",
+            "rawvideo",
+            "-pix_fmt",
+            "rgb24",
+            "-",
+        ])
+        .output()
+        .expect("ffmpeg must be installed to run this test");
+    assert!(
+        output.status.success() && !output.stdout.is_empty(),
+        "ffmpeg frame extraction failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    output
+        .stdout
+        .chunks_exact(3)
+        .filter(|rgb| rgb[0] > 180 && rgb[1] < 80 && rgb[2] < 80)
+        .count()
+}
+
+#[test]
+fn export_shows_camera_only_on_segments_that_have_one() {
+    let dir = tempfile::tempdir().unwrap();
+    let screen = dir.path().join("screen.mp4");
+    let camera = dir.path().join("camera.mp4");
+    generate_color_clip(&screen, "blue");
+    generate_color_clip(&camera, "red");
+
+    let imported = run(&[
+        "import",
+        screen.to_str().unwrap(),
+        "--dir",
+        dir.path().to_str().unwrap(),
+        "--json",
+    ]);
+    assert!(imported.status.success(), "stderr: {}", stderr(&imported));
+    let project = last_event(&imported)["projectPath"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    for extra in [
+        vec![
+            screen.to_str().unwrap(),
+            "--camera",
+            camera.to_str().unwrap(),
+        ],
+        vec![screen.to_str().unwrap()],
+    ] {
+        let mut args = vec!["project", "append", &project];
+        args.extend(extra);
+        args.push("--json");
+        let appended = run(&args);
+        assert!(appended.status.success(), "stderr: {}", stderr(&appended));
+    }
+
+    let exported = dir.path().join("export.mp4");
+    let export = run(&[
+        "export",
+        &project,
+        exported.to_str().unwrap(),
+        "--resolution",
+        "180x320",
+        "--fps",
+        "30",
+    ]);
+    assert!(export.status.success(), "stderr: {}", stderr(&export));
+
+    assert_eq!(
+        red_pixels_at(&exported, 1.0),
+        0,
+        "camera before any camera segment"
+    );
+    assert!(
+        red_pixels_at(&exported, 3.0) > 500,
+        "camera segment shows no camera"
+    );
+    assert_eq!(
+        red_pixels_at(&exported, 5.0),
+        0,
+        "camera held past its segment"
+    );
+}

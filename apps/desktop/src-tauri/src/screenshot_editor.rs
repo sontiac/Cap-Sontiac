@@ -8,7 +8,7 @@ use cap_project::{
 };
 use cap_rendering::{
     DecodedFrame, DecodedSegmentFrames, FrameRenderer, ProjectUniforms, RenderVideoConstants,
-    RendererLayers, ZoomFocusInterpolator,
+    RendererLayers, SegmentCameraFrame, ZoomFocusInterpolator,
 };
 use image::{
     GenericImageView, ImageEncoder, RgbImage, buffer::ConvertBuffer, codecs::png::PngEncoder,
@@ -343,7 +343,7 @@ impl ScreenshotEditorInstances {
                         decoded_frame.width(),
                         decoded_frame.height(),
                     )),
-                    camera_frame: None,
+                    camera: SegmentCameraFrame::Absent,
                     segment_time: 0.0,
                     recording_time: 0.0,
                 };
@@ -1363,7 +1363,7 @@ pub async fn render_screenshot_png(instance: &ScreenshotEditorInstance) -> Resul
             decoded_frame.width(),
             decoded_frame.height(),
         )),
-        camera_frame: None,
+        camera: SegmentCameraFrame::Absent,
         segment_time: 0.0,
         recording_time: 0.0,
     };
